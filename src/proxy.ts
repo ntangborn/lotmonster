@@ -35,7 +35,17 @@ function isPublic(pathname: string): boolean {
 // ---------------------------------------------------------------------------
 
 export async function proxy(request: NextRequest) {
-  const { pathname } = request.nextUrl
+  const { pathname, searchParams } = request.nextUrl
+
+  // --- Supabase auth code rescue ---
+  // When emailRedirectTo isn't on Supabase's allowlist, the magic-link lands
+  // at /?code=xxx instead of /api/auth/callback?code=xxx. Catch it here and
+  // forward to the real callback handler so the session exchange still works.
+  if (pathname === '/' && searchParams.has('code')) {
+    const callbackUrl = request.nextUrl.clone()
+    callbackUrl.pathname = '/api/auth/callback'
+    return NextResponse.redirect(callbackUrl)
+  }
 
   // --- Cron routes: validate CRON_SECRET bearer token ---
   if (cronPattern.test(pathname)) {
