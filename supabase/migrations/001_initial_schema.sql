@@ -23,9 +23,10 @@
 -- HELPER: JWT claim extractor
 -- Returns the org_id from app_metadata in the Supabase JWT.
 -- Returns NULL if the claim is absent — RLS policies treat NULL as deny.
+-- Lives in public schema (auth schema is locked in Supabase).
 -- =============================================================================
 
-CREATE OR REPLACE FUNCTION auth.org_id()
+CREATE OR REPLACE FUNCTION public.current_org_id()
 RETURNS uuid
 LANGUAGE sql
 STABLE
@@ -75,33 +76,33 @@ ALTER TABLE orgs ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "orgs_select" ON orgs
   FOR SELECT
   USING (
-    auth.org_id() IS NOT NULL
-    AND id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND id = public.current_org_id()
   );
 
 CREATE POLICY "orgs_insert" ON orgs
   FOR INSERT
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND id = public.current_org_id()
   );
 
 CREATE POLICY "orgs_update" ON orgs
   FOR UPDATE
   USING (
-    auth.org_id() IS NOT NULL
-    AND id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND id = public.current_org_id()
   )
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND id = public.current_org_id()
   );
 
 CREATE POLICY "orgs_delete" ON orgs
   FOR DELETE
   USING (
-    auth.org_id() IS NOT NULL
-    AND id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND id = public.current_org_id()
   );
 
 CREATE TRIGGER orgs_updated_at
@@ -128,33 +129,33 @@ ALTER TABLE org_members ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "org_members_select" ON org_members
   FOR SELECT
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "org_members_insert" ON org_members
   FOR INSERT
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "org_members_update" ON org_members
   FOR UPDATE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   )
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "org_members_delete" ON org_members
   FOR DELETE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 
@@ -187,33 +188,33 @@ ALTER TABLE ingredients ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "ingredients_select" ON ingredients
   FOR SELECT
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "ingredients_insert" ON ingredients
   FOR INSERT
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "ingredients_update" ON ingredients
   FOR UPDATE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   )
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "ingredients_delete" ON ingredients
   FOR DELETE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE TRIGGER ingredients_updated_at
@@ -242,33 +243,33 @@ ALTER TABLE recipes ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "recipes_select" ON recipes
   FOR SELECT
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "recipes_insert" ON recipes
   FOR INSERT
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "recipes_update" ON recipes
   FOR UPDATE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   )
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "recipes_delete" ON recipes
   FOR DELETE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE TRIGGER recipes_updated_at
@@ -296,33 +297,33 @@ ALTER TABLE recipe_lines ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "recipe_lines_select" ON recipe_lines
   FOR SELECT
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "recipe_lines_insert" ON recipe_lines
   FOR INSERT
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "recipe_lines_update" ON recipe_lines
   FOR UPDATE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   )
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "recipe_lines_delete" ON recipe_lines
   FOR DELETE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 
@@ -352,33 +353,33 @@ ALTER TABLE purchase_orders ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "purchase_orders_select" ON purchase_orders
   FOR SELECT
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "purchase_orders_insert" ON purchase_orders
   FOR INSERT
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "purchase_orders_update" ON purchase_orders
   FOR UPDATE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   )
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "purchase_orders_delete" ON purchase_orders
   FOR DELETE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 
@@ -404,33 +405,33 @@ ALTER TABLE purchase_order_lines ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "purchase_order_lines_select" ON purchase_order_lines
   FOR SELECT
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "purchase_order_lines_insert" ON purchase_order_lines
   FOR INSERT
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "purchase_order_lines_update" ON purchase_order_lines
   FOR UPDATE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   )
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "purchase_order_lines_delete" ON purchase_order_lines
   FOR DELETE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 
@@ -465,33 +466,33 @@ ALTER TABLE lots ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "lots_select" ON lots
   FOR SELECT
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "lots_insert" ON lots
   FOR INSERT
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "lots_update" ON lots
   FOR UPDATE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   )
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "lots_delete" ON lots
   FOR DELETE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 -- Index for FEFO queries: expiry_date ASC, status = 'available'
@@ -533,33 +534,33 @@ ALTER TABLE production_runs ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "production_runs_select" ON production_runs
   FOR SELECT
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "production_runs_insert" ON production_runs
   FOR INSERT
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "production_runs_update" ON production_runs
   FOR UPDATE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   )
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "production_runs_delete" ON production_runs
   FOR DELETE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 
@@ -586,33 +587,33 @@ ALTER TABLE production_run_lots ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "production_run_lots_select" ON production_run_lots
   FOR SELECT
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "production_run_lots_insert" ON production_run_lots
   FOR INSERT
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "production_run_lots_update" ON production_run_lots
   FOR UPDATE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   )
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "production_run_lots_delete" ON production_run_lots
   FOR DELETE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 
@@ -644,33 +645,33 @@ ALTER TABLE sales_orders ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "sales_orders_select" ON sales_orders
   FOR SELECT
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "sales_orders_insert" ON sales_orders
   FOR INSERT
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "sales_orders_update" ON sales_orders
   FOR UPDATE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   )
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "sales_orders_delete" ON sales_orders
   FOR DELETE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 
@@ -695,33 +696,33 @@ ALTER TABLE sales_order_lines ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "sales_order_lines_select" ON sales_order_lines
   FOR SELECT
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "sales_order_lines_insert" ON sales_order_lines
   FOR INSERT
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "sales_order_lines_update" ON sales_order_lines
   FOR UPDATE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   )
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "sales_order_lines_delete" ON sales_order_lines
   FOR DELETE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 
@@ -754,33 +755,33 @@ ALTER TABLE qbo_sync_log ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "qbo_sync_log_select" ON qbo_sync_log
   FOR SELECT
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "qbo_sync_log_insert" ON qbo_sync_log
   FOR INSERT
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "qbo_sync_log_update" ON qbo_sync_log
   FOR UPDATE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   )
   WITH CHECK (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 CREATE POLICY "qbo_sync_log_delete" ON qbo_sync_log
   FOR DELETE
   USING (
-    auth.org_id() IS NOT NULL
-    AND org_id = auth.org_id()
+    public.current_org_id() IS NOT NULL
+    AND org_id = public.current_org_id()
   );
 
 -- Index for polling failed syncs in the retry cron job
