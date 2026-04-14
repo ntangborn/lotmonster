@@ -16,6 +16,7 @@ const publicRoutes = new Set([
   '/',
   '/login',
   '/signup',
+  '/auth/callback',
   '/api/auth/callback',
   '/api/stripe/webhook',
 ])
@@ -39,11 +40,11 @@ export async function proxy(request: NextRequest) {
 
   // --- Supabase auth code rescue ---
   // When emailRedirectTo isn't on Supabase's allowlist, the magic-link lands
-  // at /?code=xxx instead of /api/auth/callback?code=xxx. Catch it here and
-  // forward to the real callback handler so the session exchange still works.
+  // at /?code=xxx. Redirect to the client-side callback page so the PKCE
+  // exchange happens in the same browser context that initiated the flow.
   if (pathname === '/' && searchParams.has('code')) {
     const callbackUrl = request.nextUrl.clone()
-    callbackUrl.pathname = '/api/auth/callback'
+    callbackUrl.pathname = '/auth/callback'
     return NextResponse.redirect(callbackUrl)
   }
 

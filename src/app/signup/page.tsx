@@ -31,8 +31,8 @@ export default function SignupPage() {
 
     const callbackUrl =
       typeof window !== 'undefined'
-        ? `${window.location.origin}/api/auth/callback`
-        : `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/callback`
+        ? `${window.location.origin}/auth/callback`
+        : `${process.env.NEXT_PUBLIC_APP_URL}/auth/callback`
 
     // 1. Create the auth user via magic link (OTP).
     //    On first sign-in the user record is created; org wiring

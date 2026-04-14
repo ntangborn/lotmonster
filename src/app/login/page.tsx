@@ -14,8 +14,8 @@ export default function LoginPage() {
 
   const callbackUrl =
     typeof window !== 'undefined'
-      ? `${window.location.origin}/api/auth/callback`
-      : `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/callback`
+      ? `${window.location.origin}/auth/callback`
+      : `${process.env.NEXT_PUBLIC_APP_URL}/auth/callback`
 
   async function handleMagicLink(e: React.FormEvent) {
     e.preventDefault()
