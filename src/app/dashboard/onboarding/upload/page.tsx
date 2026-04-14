@@ -6,7 +6,7 @@ import { useForm, useFieldArray, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import * as XLSX from 'xlsx'
-import { Plus, Trash2, AlertCircle, CheckCircle2, Loader2, UploadCloud } from 'lucide-react'
+import { Plus, Trash2, AlertCircle, CheckCircle2, Loader2, UploadCloud, Sparkles } from 'lucide-react'
 import { bulkInsertIngredients } from '@/lib/actions/ingredients'
 
 // ---------------------------------------------------------------------------
@@ -209,7 +209,9 @@ function Cell({
 
 type Stage =
   | { type: 'selecting' }
-  | { type: 'parsing' }
+  | { type: 'parsing' }                       // spreadsheet parsing (local, fast)
+  | { type: 'vision' }                        // AI image/PDF extraction (network)
+  | { type: 'vision_failed'; raw?: string }   // Claude returned unparseable output
   | { type: 'mapping'; headers: string[]; rawRows: string[][] }
   | { type: 'confirming' }
   | { type: 'saving' }
@@ -280,21 +282,37 @@ export default function UploadPage() {
         setStage({ type: 'error', message: (e as Error).message })
       }
     } else {
-      // Image or PDF → Claude Vision
+      // Image or PDF → Claude Vision via /api/ai/extract-ingredients
+      setStage({ type: 'vision' })
       try {
         const fd = new FormData()
         fd.append('file', file)
-        const res = await fetch('/api/ai/parse-ingredients', { method: 'POST', body: fd })
-        if (!res.ok) throw new Error('Claude Vision failed. Try a different file.')
-        const { ingredients } = await res.json()
+        const res = await fetch('/api/ai/extract-ingredients', { method: 'POST', body: fd })
+        const json = await res.json()
 
-        const draftRows: RowValues[] = (ingredients as Array<{
-          name: string; unit?: string; unit_cost?: number; quantity?: number
-        }>).map((ing) => ({
+        if (!res.ok) {
+          // 422 = Claude returned unparseable output (show fallback UI)
+          if (res.status === 422 && json.fallback) {
+            setStage({ type: 'vision_failed', raw: json.raw })
+            return
+          }
+          throw new Error(json.error ?? 'AI extraction failed.')
+        }
+
+        const ingredients = json.ingredients as Array<{
+          name: string; sku?: string | null; unit?: string | null
+          category?: string | null; quantity?: number | null; unit_cost?: number | null
+        }>
+
+        const draftRows: RowValues[] = ingredients.map((ing) => ({
           name: ing.name ?? '',
-          sku: '',
-          unit: (UNITS as readonly string[]).includes(ing.unit ?? '') ? (ing.unit as typeof UNITS[number]) : 'oz',
-          category: '' as const,
+          sku: ing.sku ?? '',
+          unit: (UNITS as readonly string[]).includes(ing.unit ?? '')
+            ? (ing.unit as typeof UNITS[number])
+            : 'oz',
+          category: (CATEGORIES as readonly string[]).includes(ing.category ?? '')
+            ? ing.category!
+            : '',
           qty: ing.quantity != null ? String(ing.quantity) : '',
           unit_cost: ing.unit_cost != null ? String(ing.unit_cost) : '',
         }))
@@ -390,11 +408,73 @@ export default function UploadPage() {
         </div>
       )}
 
-      {/* ── Stage: parsing ── */}
+      {/* ── Stage: parsing (spreadsheet — local) ── */}
       {stage.type === 'parsing' && (
         <div className="flex flex-col items-center gap-3 py-20">
           <Loader2 size={32} className="animate-spin text-teal-400" />
           <p className="text-sm text-white/50">Parsing file…</p>
+        </div>
+      )}
+
+      {/* ── Stage: vision (AI image/PDF extraction) ── */}
+      {stage.type === 'vision' && (
+        <div className="flex flex-col items-center gap-4 py-20">
+          <div className="relative">
+            <Loader2 size={40} className="animate-spin text-teal-400" />
+            <Sparkles
+              size={16}
+              className="absolute -right-1 -top-1 text-teal-300 animate-pulse"
+            />
+          </div>
+          <div className="text-center">
+            <p className="text-sm font-medium text-white">AI is reading your image…</p>
+            <p className="mt-1 text-xs text-white/30">
+              Claude is extracting ingredient names, units, and costs
+            </p>
+          </div>
+          <div className="mt-2 flex gap-1">
+            {[0, 1, 2].map((i) => (
+              <div
+                key={i}
+                className="h-1.5 w-1.5 rounded-full bg-teal-500 animate-bounce"
+                style={{ animationDelay: `${i * 150}ms` }}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Stage: vision_failed (fallback) ── */}
+      {stage.type === 'vision_failed' && (
+        <div className="mx-auto max-w-md rounded-2xl border border-amber-500/30 bg-amber-500/10 p-8 text-center">
+          <div className="mb-4 text-3xl">🤔</div>
+          <h2 className="mb-2 text-base font-semibold text-white">
+            AI couldn&apos;t read this image
+          </h2>
+          <p className="mb-1 text-sm text-white/50">
+            The image may be too blurry, low-contrast, or not contain ingredient data
+            in a recognisable format.
+          </p>
+          <p className="mb-6 text-xs text-white/30">
+            Try a clearer photo, or switch to manual entry.
+          </p>
+          <div className="flex flex-col gap-2">
+            <button
+              onClick={() => setStage({ type: 'selecting' })}
+              className="rounded-lg bg-teal-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-400"
+            >
+              Try a different image
+            </button>
+            <button
+              onClick={() => {
+                reset({ rows: [BLANK_ROW] })
+                setStage({ type: 'confirming' })
+              }}
+              className="rounded-lg border border-white/10 px-4 py-2.5 text-sm text-white/50 hover:text-white"
+            >
+              Enter manually instead
+            </button>
+          </div>
         </div>
       )}
 
