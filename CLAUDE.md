@@ -17,62 +17,78 @@ GitHub: **https://github.com/ntangborn/lotmonster**
 - Stripe, QuickBooks Online (stubs only, not yet built)
 - Vitest for tests
 
-## ⚠️ ACTIVE BUG — Auth Not Working (top priority)
+## Auth — Working (6-digit OTP flow)
 
-Magic link auth is broken in production. The flow currently fails.
+Email auth uses 6–8 digit OTP codes, **not** magic links. Magic links were
+abandoned after persistent `PKCE code verifier not found in storage` errors
+caused by @supabase/ssr hardcoding `flowType: "pkce"` and users opening email
+links in different browser contexts than where they requested them.
 
-### What happens:
-1. User requests magic link on `/login` or `/signup`
-2. Supabase sends email with link → lands at `https://www.lotmonster.co/?code=xxx`
-   (because `emailRedirectTo` URL is not on Supabase's allowlist, so Supabase
-   falls back to Site URL)
-3. `src/proxy.ts` intercepts `/?code=xxx` → redirects to `/auth/callback?code=xxx`
-4. Client-side page `src/app/auth/callback/page.tsx` calls `exchangeCodeForSession(code)`
-5. **FAILS** → user ends up at `/login?error=auth_callback_failed`
+### Flow:
+1. User enters email on `/login` or `/signup`
+2. Client calls `signInWithOtp({ email, options: { shouldCreateUser } })`
+3. Supabase sends email with `{{ .Token }}` (8-digit code, configured via
+   `mailer_otp_length`)
+4. Form switches to code-input stage
+5. User pastes code → `verifyOtp({ email, token, type: 'email' })` → session
+   cookie written → router.replace to dashboard
 
-### What has been tried:
-- Server-side route handler at `/api/auth/callback/route.ts` — fails (PKCE verifier not accessible server-side)
-- Fixed wrong env var (`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` → `NEXT_PUBLIC_SUPABASE_ANON_KEY`)
-- Added proxy rescue for `/?code=xxx` → `/auth/callback`
-- Switched to client-side `exchangeCodeForSession` — still failing
-- The actual Supabase error message has NOT been captured yet
+### Files:
+- `src/app/login/page.tsx` — two-stage form (email → code)
+- `src/app/signup/page.tsx` — two-stage form w/ org_name in `options.data`
+- `src/app/auth/callback/page.tsx` — **only used by Google OAuth now**,
+  performs PKCE exchange via `exchangeCodeForSession`
+- `src/lib/supabase/proxy.ts` + `claims.ts` — read session via
+  `createServerClient.auth.getUser()`; the old manual `JSON.parse` broke
+  because @supabase/ssr encodes session cookies as `base64-<payload>`,
+  sometimes chunked into `.0`, `.1`
 
-### Most likely remaining causes (in order):
-1. **Supabase Redirect URL allowlist** — `https://www.lotmonster.co/auth/callback`
-   has NOT been added to Authentication → URL Configuration → Redirect URLs.
-   Without this, Supabase ignores `emailRedirectTo` entirely. Fix this first.
-2. **PKCE verifier cookie lost on cross-site redirect** — Supabase stores the
-   code_verifier cookie when `signInWithOtp` is called. If SameSite policy
-   prevents it from being sent when Supabase.co redirects back to lotmonster.co,
-   the exchange fails. Fix: disable PKCE flow in Supabase Dashboard →
-   Authentication → Settings → "Use implicit flow" (sends `#access_token=xxx`
-   in URL hash instead of `?code=xxx`)
-3. **Code already consumed** — if both `/api/auth/callback` AND `/auth/callback`
-   are being hit for the same code, the second attempt fails. Verify only one
-   handler is running.
+### Supabase config (managed via Management API, not dashboard):
+- `mailer_otp_length: 8`
+- `mailer_templates_magic_link_content` / `..._confirmation_content` —
+  render `{{ .Token }}` as the code (updated from default link-only template)
+- `uri_allow_list`: `https://lotmonster.co,https://www.lotmonster.co/auth/callback,http://localhost:3000/auth/callback`
+  (matters only for Google OAuth — OTP doesn't hit callback URLs)
 
-### Next debugging step:
-Get the actual Supabase error message. The client callback at
-`src/app/auth/callback/page.tsx` currently silently redirects on failure.
-Temporarily make it show the error on screen (the code for this was being
-written when credits ran out — it was NOT saved to the file).
+### Supabase CLI setup:
+```
+npx supabase login --token <SUPABASE_ACCESS_TOKEN>
+npx supabase link --project-ref vvoyidhqlxjcuhhsdiyy
+```
+Access tokens: https://supabase.com/dashboard/account/tokens
+(can't use interactive login in non-TTY)
 
-### Supabase dashboard to-dos:
-- Authentication → URL Configuration → Redirect URLs:
-  Add `https://www.lotmonster.co/auth/callback` and `http://localhost:3000/auth/callback`
-- Consider switching to Implicit flow if PKCE keeps failing
-- Supabase CLI login: `npx supabase login --token <SUPABASE_ACCESS_TOKEN>`
-  (can't use interactive login in non-TTY, need personal access token from
-  https://supabase.com/dashboard/account/tokens)
+### Management API — read/write auth config without dashboard:
+```bash
+# Read full auth config
+curl -sk --ssl-no-revoke -H "Authorization: Bearer <TOKEN>" \
+  https://api.supabase.com/v1/projects/vvoyidhqlxjcuhhsdiyy/config/auth
+
+# Patch fields
+curl -sk --ssl-no-revoke -X PATCH \
+  -H "Authorization: Bearer <TOKEN>" -H "Content-Type: application/json" \
+  -d '{"uri_allow_list":"..."}' \
+  https://api.supabase.com/v1/projects/vvoyidhqlxjcuhhsdiyy/config/auth
+```
+
+---
+
+## ⚠️ Known issues / deferred
+
+- **Exposed credentials**: service role key + Supabase access token were
+  pasted in a previous Claude session. Rotate when convenient
+  (Supabase Dashboard → Settings → API).
+- **Homepage is a placeholder** — big LOTMONSTER wordmark + tagline +
+  Sign Up/Log In buttons. Proper landing page needs to be specced
+  (use `bob-builder` agent).
 
 ---
 
 ## Completed Features
 
 ### Auth
-- Magic link + Google OAuth (`src/app/login/page.tsx`)
-- Signup with org name (`src/app/signup/page.tsx`)
-- Auth callback — client-side PKCE exchange (`src/app/auth/callback/page.tsx`)
+- Email 6–8 digit OTP + Google OAuth (`src/app/login/page.tsx`, `src/app/signup/page.tsx`)
+- Google OAuth still uses PKCE callback (`src/app/auth/callback/page.tsx`)
 - Logout (`src/app/api/auth/logout/route.ts`)
 - Dashboard layout auth guard via `getServerClaims()` (`src/app/dashboard/layout.tsx`)
 
@@ -81,7 +97,7 @@ written when credits ran out — it was NOT saved to the file).
 - RLS with `public.current_org_id()` helper (NOT `auth.` schema — it's locked)
 - Migration 002: `CHECK (unit_cost > 0)` on lots table
 
-### Onboarding (3 paths — all built, blocked by auth bug)
+### Onboarding (3 paths — all built, auth working)
 - Welcome screen with equal-weight cards + global drag-drop (`src/app/dashboard/onboarding/page.tsx`)
 - Path A Upload: spreadsheet parse, Claude Vision, column mapping, editable table (`src/app/dashboard/onboarding/upload/page.tsx`)
 - Path B Manual: form with bulk pricing, live cost derivation chain (`src/app/dashboard/onboarding/manual/page.tsx`)
