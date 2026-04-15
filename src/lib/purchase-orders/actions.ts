@@ -83,6 +83,11 @@ export async function receiveDelivery(
       input.lot_number?.trim() ||
       (await suggestLotNumber(orgId, line.ingredient_id, new Date()))
 
+    const unitCost =
+      input.unit_cost_override != null
+        ? input.unit_cost_override
+        : Number(line.unit_cost)
+
     const { data: lot, error: lotErr } = await admin
       .from('lots')
       .insert({
@@ -94,7 +99,7 @@ export async function receiveDelivery(
         quantity_received: input.quantity_received,
         quantity_remaining: input.quantity_received,
         unit: line.unit,
-        unit_cost: Number(line.unit_cost),
+        unit_cost: unitCost,
         received_date: input.received_date || today,
         expiry_date: input.expiry_date || null,
         status: 'available',
@@ -137,6 +142,17 @@ export async function receiveDelivery(
     .update(update)
     .eq('id', poId)
   if (poErr) throw new Error(poErr.message)
+
+  // Stub QBO Bill sync — actual posting happens in a future cron.
+  // One pending row per receive event so the cron can dedupe / replay.
+  if (createdLotIds.length > 0) {
+    await admin.from('qbo_sync_log').insert({
+      org_id: orgId,
+      entity_type: 'bill',
+      entity_id: poId,
+      status: 'pending',
+    })
+  }
 
   return { created_lot_ids: createdLotIds }
 }

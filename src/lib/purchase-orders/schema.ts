@@ -41,6 +41,12 @@ export const receiveLineSchema = z.object({
   supplier_lot_number: z.string().trim().max(100).optional().nullable(),
   expiry_date: z.string().optional().nullable(),
   received_date: z.string().optional(),
+  // Optional override of the PO line's unit_cost (e.g. price changed at delivery)
+  unit_cost_override: z
+    .number()
+    .positive('Unit cost must be greater than 0')
+    .optional()
+    .nullable(),
 })
 
 export const receivePOSchema = z.object({

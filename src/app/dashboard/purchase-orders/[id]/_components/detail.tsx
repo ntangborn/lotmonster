@@ -12,7 +12,6 @@ import {
   AlertCircle,
   Loader2,
   Trash2,
-  PackageCheck,
 } from 'lucide-react'
 import type { PODetail } from '@/lib/purchase-orders/queries'
 
@@ -57,7 +56,6 @@ export function PODetailView({ initial }: { initial: PODetail }) {
   const { po, lines, computed_total } = initial
   const [busy, setBusy] = useState<null | string>(null)
   const [err, setErr] = useState('')
-  const [receiveOpen, setReceiveOpen] = useState(false)
 
   async function transition(to: 'sent' | 'cancelled' | 'closed') {
     setBusy(`status:${to}`)
@@ -185,14 +183,13 @@ export function PODetailView({ initial }: { initial: PODetail }) {
               po.status === 'partially_received') && (
               <>
                 {hasOutstanding && (
-                  <button
-                    onClick={() => setReceiveOpen(true)}
-                    disabled={busy != null}
-                    className="flex items-center justify-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-400 disabled:opacity-50"
+                  <Link
+                    href={`/dashboard/purchase-orders/${po.id}/receive`}
+                    className="flex items-center justify-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-400"
                   >
                     <Truck size={14} />
                     Receive Delivery
-                  </button>
+                  </Link>
                 )}
                 <button
                   onClick={() => transition('cancelled')}
@@ -303,259 +300,6 @@ export function PODetailView({ initial }: { initial: PODetail }) {
         )}
       </section>
 
-      {receiveOpen && canReceive && (
-        <ReceiveModal
-          lines={lines.filter((l) => l.qty_outstanding > 0)}
-          poId={po.id}
-          onClose={() => setReceiveOpen(false)}
-          onReceived={() => {
-            setReceiveOpen(false)
-            router.refresh()
-          }}
-        />
-      )}
-    </div>
-  )
-}
-
-interface ReceiveLine {
-  uid: string
-  line_id: string
-  ingredient_name: string
-  outstanding: number
-  unit: string
-  qty: string
-  lot_number: string
-  supplier_lot: string
-  expiry: string
-}
-
-function ReceiveModal({
-  lines,
-  poId,
-  onClose,
-  onReceived,
-}: {
-  lines: PODetail['lines']
-  poId: string
-  onClose: () => void
-  onReceived: () => void
-}) {
-  const router = useRouter()
-  const today = new Date().toISOString().slice(0, 10)
-  const [receivedDate, setReceivedDate] = useState(today)
-  const [notes, setNotes] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState('')
-  const [rows, setRows] = useState<ReceiveLine[]>(() =>
-    lines.map((l) => ({
-      uid: l.id,
-      line_id: l.id,
-      ingredient_name: l.ingredient_name,
-      outstanding: l.qty_outstanding,
-      unit: l.unit,
-      qty: String(l.qty_outstanding),
-      lot_number: '',
-      supplier_lot: '',
-      expiry: '',
-    }))
-  )
-
-  function update(uid: string, patch: Partial<ReceiveLine>) {
-    setRows((prev) =>
-      prev.map((r) => (r.uid === uid ? { ...r, ...patch } : r))
-    )
-  }
-
-  async function submit() {
-    const filled = rows.filter((r) => Number(r.qty) > 0)
-    if (filled.length === 0) {
-      setErr('Enter a received quantity for at least one line')
-      return
-    }
-    for (const r of filled) {
-      if (Number(r.qty) > r.outstanding) {
-        setErr(
-          `${r.ingredient_name}: cannot receive more than outstanding (${r.outstanding})`
-        )
-        return
-      }
-    }
-    setBusy(true)
-    setErr('')
-    const body = {
-      lines: filled.map((r) => ({
-        line_id: r.line_id,
-        quantity_received: Number(r.qty),
-        lot_number: r.lot_number.trim() || undefined,
-        supplier_lot_number: r.supplier_lot.trim() || null,
-        expiry_date: r.expiry || null,
-        received_date: receivedDate || today,
-      })),
-      notes: notes.trim() || null,
-    }
-    const res = await fetch(`/api/purchase-orders/${poId}/receive`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    setBusy(false)
-    if (!res.ok) {
-      const e = await res.json().catch(() => ({}))
-      setErr(
-        e.error === 'validation_failed'
-          ? e.issues?.[0]?.message ?? 'Validation failed'
-          : e.error ?? 'Receive failed'
-      )
-      return
-    }
-    onReceived()
-    router.refresh()
-  }
-
-  const inputCls =
-    'w-full rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-white placeholder:text-white/30 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500'
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 pt-10"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-3xl rounded-2xl border border-white/10 bg-[#0D1B2A] p-6"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="mb-4 flex items-center gap-2">
-          <PackageCheck size={18} className="text-emerald-400" />
-          <h3 className="text-lg font-semibold text-white">Receive Delivery</h3>
-        </div>
-        <p className="mb-4 text-xs text-white/50">
-          Each received quantity creates a new lot in inventory at the PO&apos;s
-          unit cost. Lot numbers auto-generate if left blank.
-        </p>
-
-        {err && (
-          <div className="mb-3 flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
-            <AlertCircle size={14} />
-            {err}
-          </div>
-        )}
-
-        <div className="mb-3 grid gap-3 sm:grid-cols-2">
-          <label className="block">
-            <span className="mb-1 block text-xs font-medium text-white/50">
-              Received date
-            </span>
-            <input
-              type="date"
-              value={receivedDate}
-              onChange={(e) => setReceivedDate(e.target.value)}
-              className={inputCls}
-            />
-          </label>
-          <label className="block">
-            <span className="mb-1 block text-xs font-medium text-white/50">
-              Notes
-            </span>
-            <input
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              className={inputCls}
-              placeholder="Optional"
-            />
-          </label>
-        </div>
-
-        <div className="space-y-2">
-          {rows.map((r) => (
-            <div
-              key={r.uid}
-              className="rounded-lg border border-white/10 bg-white/[0.02] p-3"
-            >
-              <div className="mb-2 flex items-center justify-between">
-                <span className="text-sm font-medium text-white">
-                  {r.ingredient_name}
-                </span>
-                <span className="text-xs text-white/50">
-                  Outstanding:{' '}
-                  <span className="font-mono text-white/80">
-                    {r.outstanding} {r.unit}
-                  </span>
-                </span>
-              </div>
-              <div className="grid gap-2 sm:grid-cols-4">
-                <label className="block">
-                  <span className="mb-0.5 block text-[10px] text-white/40">
-                    Qty received ({r.unit})
-                  </span>
-                  <input
-                    type="number"
-                    step="any"
-                    min="0"
-                    max={r.outstanding}
-                    value={r.qty}
-                    onChange={(e) => update(r.uid, { qty: e.target.value })}
-                    className={inputCls}
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-0.5 block text-[10px] text-white/40">
-                    Lot # (auto if blank)
-                  </span>
-                  <input
-                    value={r.lot_number}
-                    onChange={(e) =>
-                      update(r.uid, { lot_number: e.target.value })
-                    }
-                    className={inputCls}
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-0.5 block text-[10px] text-white/40">
-                    Supplier lot #
-                  </span>
-                  <input
-                    value={r.supplier_lot}
-                    onChange={(e) =>
-                      update(r.uid, { supplier_lot: e.target.value })
-                    }
-                    className={inputCls}
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-0.5 block text-[10px] text-white/40">
-                    Expiry
-                  </span>
-                  <input
-                    type="date"
-                    value={r.expiry}
-                    onChange={(e) => update(r.uid, { expiry: e.target.value })}
-                    className={inputCls}
-                  />
-                </label>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-5 flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            disabled={busy}
-            className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white/70 hover:bg-white/10"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={submit}
-            disabled={busy}
-            className="flex items-center gap-2 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-400 disabled:opacity-50"
-          >
-            {busy && <Loader2 size={14} className="animate-spin" />}
-            Receive &amp; Create Lots
-          </button>
-        </div>
-      </div>
     </div>
   )
 }
