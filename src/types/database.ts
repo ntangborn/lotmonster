@@ -31,6 +31,10 @@ export interface Database {
           qbo_refresh_token_expires_at: string | null
           qbo_environment: 'sandbox' | 'production' | null
           qbo_connected_at: string | null
+          qbo_cogs_account_id: string | null
+          qbo_inventory_account_id: string | null
+          qbo_ar_account_id: string | null
+          qbo_ap_account_id: string | null
           created_at: string
           updated_at: string
         }
@@ -45,6 +49,10 @@ export interface Database {
           qbo_refresh_token_expires_at?: string | null
           qbo_environment?: 'sandbox' | 'production' | null
           qbo_connected_at?: string | null
+          qbo_cogs_account_id?: string | null
+          qbo_inventory_account_id?: string | null
+          qbo_ar_account_id?: string | null
+          qbo_ap_account_id?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -59,6 +67,10 @@ export interface Database {
           qbo_refresh_token_expires_at?: string | null
           qbo_environment?: 'sandbox' | 'production' | null
           qbo_connected_at?: string | null
+          qbo_cogs_account_id?: string | null
+          qbo_inventory_account_id?: string | null
+          qbo_ar_account_id?: string | null
+          qbo_ap_account_id?: string | null
           updated_at?: string
         }
         Relationships: []
@@ -281,6 +293,7 @@ export interface Database {
           expected_delivery_date: string | null
           total_amount: number | null
           notes: string | null
+          qbo_bill_id: string | null
           created_at: string
         }
         Insert: {
@@ -292,6 +305,7 @@ export interface Database {
           expected_delivery_date?: string | null
           total_amount?: number | null
           notes?: string | null
+          qbo_bill_id?: string | null
           created_at?: string
         }
         Update: {
@@ -303,6 +317,7 @@ export interface Database {
           expected_delivery_date?: string | null
           total_amount?: number | null
           notes?: string | null
+          qbo_bill_id?: string | null
         }
         Relationships: []
       }
@@ -364,6 +379,7 @@ export interface Database {
           notes: string | null
           started_at: string | null
           completed_at: string | null
+          qbo_journal_entry_id: string | null
           created_at: string
         }
         Insert: {
@@ -383,6 +399,7 @@ export interface Database {
           notes?: string | null
           started_at?: string | null
           completed_at?: string | null
+          qbo_journal_entry_id?: string | null
           created_at?: string
         }
         Update: {
@@ -402,6 +419,7 @@ export interface Database {
           notes?: string | null
           started_at?: string | null
           completed_at?: string | null
+          qbo_journal_entry_id?: string | null
         }
         Relationships: []
       }
