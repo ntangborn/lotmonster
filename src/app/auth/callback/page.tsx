@@ -31,7 +31,8 @@ function CallbackHandler() {
     supabase.auth.exchangeCodeForSession(code).then(({ data, error }) => {
       if (error) {
         console.error('[auth/callback] exchangeCodeForSession:', error.message)
-        router.replace('/login?error=auth_callback_failed')
+        const reason = encodeURIComponent(error.message.slice(0, 200))
+        router.replace(`/login?error=auth_callback_failed&reason=${reason}`)
         return
       }
 
