@@ -41,6 +41,10 @@ README.md.bak
 # vercel
 .vercel
 
+# supabase
+supabase/.temp/
+auth_config.json
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
