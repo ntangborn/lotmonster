@@ -1,12 +1,20 @@
 /**
  * QBO API client. Wraps fetch with auth, base URL resolution,
  * minorversion=75 pinning, and one-shot retry on 401 (auto-refresh).
+ * If the retry also returns 401, we treat the connection as dead:
+ * disconnect the org and throw QBOTokenExpiredError so the caller
+ * can prompt for a reconnect.
  *
  * Use for all server-side QBO calls (cron, webhooks, server actions).
  * NEVER use from the browser — never expose access tokens client-side.
  */
 
-import { getQBOAccessToken, clearAccessCache } from './tokens'
+import {
+  getQBOAccessToken,
+  clearAccessCache,
+  disconnectQBO,
+  QBOTokenExpiredError,
+} from './tokens'
 
 const SANDBOX_BASE = 'https://sandbox-quickbooks.api.intuit.com'
 const PROD_BASE = 'https://quickbooks.api.intuit.com'
@@ -85,9 +93,16 @@ async function doFetch(
 
   // 401 from QBO usually means the access token expired between mint
   // and request (clock skew, edge cases). Refresh once and retry.
-  if (res.status === 401 && allowRetry) {
-    clearAccessCache(orgId)
-    return doFetch(orgId, endpoint, options, false)
+  if (res.status === 401) {
+    if (allowRetry) {
+      clearAccessCache(orgId)
+      return doFetch(orgId, endpoint, options, false)
+    }
+    // Persistent 401 even after a fresh token — the connection is
+    // genuinely dead. Clear stored credentials and bubble a typed
+    // error so the UI can show "Reconnect QuickBooks".
+    await disconnectQBO(orgId)
+    throw new QBOTokenExpiredError()
   }
 
   return res

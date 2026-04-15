@@ -2,12 +2,14 @@
  * QBO token lifecycle:
  *   - Refresh tokens live in orgs.qbo_refresh_token_encrypted (AES-GCM).
  *   - Access tokens are minted on demand and cached in-process by orgId
- *     until ~60s before their 1-hour TTL.
+ *     until 5 minutes before their 1-hour TTL (CACHE_BUFFER_SECONDS).
  *   - On refresh, Intuit returns a new refresh token — we replace the
  *     stored one. (Per docs: "Each refresh response returns a new
  *     refresh_token. Always store and use the latest one.")
- *   - Refresh tokens have a 5-year hard max; if expired, the user has
- *     to reconnect.
+ *   - Refresh tokens have a 5-year hard max; if Intuit rejects the
+ *     refresh (400/401), we automatically clear stored credentials
+ *     and throw QBOTokenExpiredError. Callers should catch that and
+ *     show a "Reconnect QuickBooks" prompt → /api/qbo/connect.
  */
 
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -15,6 +17,7 @@ import { decryptToken, encryptToken } from './encryption'
 
 const TOKEN_ENDPOINT =
   'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer'
+const CACHE_BUFFER_SECONDS = 300 // refresh 5 min before access-token expiry
 
 export interface QBOConnection {
   realmId: string
@@ -170,13 +173,16 @@ export async function persistConnection(
   // doesn't pay the round-trip.
   accessCache.set(orgId, {
     accessToken: tokens.access_token,
-    expiresAt: Date.now() + (tokens.expires_in - 60) * 1000,
+    expiresAt: Date.now() + (tokens.expires_in - CACHE_BUFFER_SECONDS) * 1000,
   })
 }
 
 /**
  * Returns a valid access token, refreshing if the cached one is missing
- * or close to expiry. On refresh, persists the new refresh_token.
+ * or within 5 minutes of expiry. On successful refresh, persists the
+ * new (rotated) refresh_token. If Intuit rejects the refresh token,
+ * automatically disconnects and throws QBOTokenExpiredError so the
+ * UI can prompt the user to reconnect.
  */
 export async function getQBOAccessToken(orgId: string): Promise<{
   accessToken: string
@@ -185,6 +191,7 @@ export async function getQBOAccessToken(orgId: string): Promise<{
 }> {
   const state = await loadOrgQBOState(orgId)
   if (state.refreshExpiresAt && state.refreshExpiresAt.getTime() < Date.now()) {
+    await disconnectQBO(orgId)
     throw new QBOTokenExpiredError()
   }
 
@@ -197,7 +204,17 @@ export async function getQBOAccessToken(orgId: string): Promise<{
     }
   }
 
-  const tokens = await refreshAccessToken(state.refreshToken)
+  let tokens
+  try {
+    tokens = await refreshAccessToken(state.refreshToken)
+  } catch (e) {
+    if (e instanceof QBOTokenExpiredError) {
+      // Intuit rejected the refresh token — clear stored credentials
+      // so the next /api/qbo/connect attempt starts clean.
+      await disconnectQBO(orgId)
+    }
+    throw e
+  }
   // Persist new refresh token (it rotates on every refresh)
   await persistConnection(orgId, state.realmId, state.environment, tokens)
   return {
