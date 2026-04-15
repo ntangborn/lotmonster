@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import {
@@ -14,6 +14,8 @@ import {
   Trash2,
   Plus,
   X,
+  Sparkles,
+  GitBranch,
 } from 'lucide-react'
 import type { SODetail } from '@/lib/sales-orders/queries'
 
@@ -216,6 +218,17 @@ export function SODetailView({ initial }: { initial: SODetail }) {
                 Mark Delivered
               </button>
             )}
+            {(so.status === 'shipped' ||
+              so.status === 'invoiced' ||
+              so.status === 'closed') && (
+              <Link
+                href={`/dashboard/traceability?type=order&q=${encodeURIComponent(so.order_number)}`}
+                className="flex items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/80 hover:bg-white/10"
+              >
+                <GitBranch size={14} />
+                View Traceability
+              </Link>
+            )}
           </div>
         </div>
       </div>
@@ -358,6 +371,15 @@ interface ShipLineState {
   pending: string
 }
 
+interface RunSuggestion {
+  run_id: string
+  run_number: string
+  status: string
+  actual_yield: number | null
+  yield_unit: string | null
+  completed_at: string | null
+}
+
 function ShipModal({
   soId,
   lines,
@@ -374,6 +396,7 @@ function ShipModal({
   const [notes, setNotes] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [suggestions, setSuggestions] = useState<Record<string, RunSuggestion[]>>({})
   const [rows, setRows] = useState<ShipLineState[]>(() =>
     lines.map((l) => ({
       uid: l.id,
@@ -385,6 +408,25 @@ function ShipModal({
       pending: '',
     }))
   )
+
+  useEffect(() => {
+    fetch(`/api/sales-orders/${soId}/suggestions`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.suggestions) setSuggestions(d.suggestions)
+      })
+      .catch(() => {})
+  }, [soId])
+
+  function addSuggestion(uid: string, runNumber: string) {
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.uid !== uid) return r
+        if (r.lots.includes(runNumber)) return r
+        return { ...r, lots: [...r.lots, runNumber] }
+      })
+    )
+  }
 
   function update(uid: string, patch: Partial<ShipLineState>) {
     setRows((prev) => prev.map((r) => (r.uid === uid ? { ...r, ...patch } : r)))
@@ -523,6 +565,41 @@ function ShipModal({
                 )}
               </div>
 
+              {(suggestions[r.line_id]?.length ?? 0) > 0 && (
+                <div className="mb-2 rounded border border-teal-500/20 bg-teal-500/[0.04] p-2">
+                  <div className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wider text-teal-300">
+                    <Sparkles size={10} />
+                    Suggested runs (FEFO-allocated)
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {suggestions[r.line_id].map((s) => {
+                      const already = r.lots.includes(s.run_number)
+                      return (
+                        <button
+                          key={s.run_id}
+                          type="button"
+                          disabled={already}
+                          onClick={() => addSuggestion(r.uid, s.run_number)}
+                          className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[11px] transition-colors ${
+                            already
+                              ? 'border-white/10 bg-white/5 text-white/30'
+                              : 'border-teal-500/30 bg-teal-500/10 text-teal-200 hover:bg-teal-500/20'
+                          }`}
+                          title={
+                            s.actual_yield != null
+                              ? `${s.actual_yield} ${s.yield_unit ?? ''} · ${s.status}`
+                              : s.status
+                          }
+                        >
+                          {already ? '✓' : <Plus size={9} />}
+                          {s.run_number}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div className="flex gap-2">
                 <input
                   value={r.pending}
@@ -533,7 +610,7 @@ function ShipModal({
                       addLot(r.uid)
                     }
                   }}
-                  placeholder="Add lot # (e.g. PR-2026-001 or HOT-20260415-001)"
+                  placeholder="Or add custom lot # (e.g. HOT-20260415-001)"
                   className={`${inputCls} font-mono`}
                 />
                 <button

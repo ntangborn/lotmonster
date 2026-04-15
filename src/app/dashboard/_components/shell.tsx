@@ -17,6 +17,7 @@ import {
   X,
   LogOut,
   ChevronRight,
+  GitBranch,
 } from 'lucide-react'
 
 const NAV = [
@@ -27,6 +28,7 @@ const NAV = [
   { label: 'Production Runs', href: '/dashboard/production-runs',  icon: Factory },
   { label: 'Purchase Orders', href: '/dashboard/purchase-orders',  icon: ClipboardList },
   { label: 'Sales Orders',    href: '/dashboard/sales-orders',     icon: ShoppingBag },
+  { label: 'Traceability',    href: '/dashboard/traceability',     icon: GitBranch },
   { label: 'AI Assistant',    href: '/dashboard/ai',               icon: Sparkles },
   { label: 'Settings',        href: '/dashboard/settings',         icon: Settings },
 ]
