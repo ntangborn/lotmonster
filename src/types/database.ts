@@ -27,6 +27,10 @@ export interface Database {
           plan: OrgPlan
           stripe_customer_id: string | null
           qbo_realm_id: string | null
+          qbo_refresh_token_encrypted: string | null
+          qbo_refresh_token_expires_at: string | null
+          qbo_environment: 'sandbox' | 'production' | null
+          qbo_connected_at: string | null
           created_at: string
           updated_at: string
         }
@@ -37,6 +41,10 @@ export interface Database {
           plan?: OrgPlan
           stripe_customer_id?: string | null
           qbo_realm_id?: string | null
+          qbo_refresh_token_encrypted?: string | null
+          qbo_refresh_token_expires_at?: string | null
+          qbo_environment?: 'sandbox' | 'production' | null
+          qbo_connected_at?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -47,6 +55,10 @@ export interface Database {
           plan?: OrgPlan
           stripe_customer_id?: string | null
           qbo_realm_id?: string | null
+          qbo_refresh_token_encrypted?: string | null
+          qbo_refresh_token_expires_at?: string | null
+          qbo_environment?: 'sandbox' | 'production' | null
+          qbo_connected_at?: string | null
           updated_at?: string
         }
         Relationships: []
