@@ -2,12 +2,15 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { useForm, useFieldArray, Controller } from 'react-hook-form'
+import { useForm, useFieldArray, useWatch, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import * as XLSX from 'xlsx'
 import { Plus, Trash2, AlertCircle, CheckCircle2, Loader2, UploadCloud, Sparkles } from 'lucide-react'
 import { bulkInsertIngredients } from '@/lib/actions/ingredients'
+import { validateIngredientCost } from '@/lib/validation'
+import { ZeroCostWarning } from '@/components/zero-cost-warning'
+import { getPendingFile, clearPendingFile } from '@/lib/onboarding-file'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -54,10 +57,9 @@ const rowSchema = z.object({
   unit: z.enum(UNITS, { error: () => ({ message: 'Select a unit' }) }),
   category: z.string(),
   qty: z.string(),
-  unit_cost: z.string().refine(
-    (v) => !v || Number(v) > 0,
-    'Must be > 0 if provided'
-  ),
+  unit_cost: z.string()
+    .refine((v) => !v || Number(v) !== 0, 'Unit cost cannot be $0.00')
+    .refine((v) => !v || Number(v) >= 0, 'Unit cost cannot be negative'),
 })
 
 const formSchema = z.object({ rows: z.array(rowSchema).min(1) })
@@ -235,14 +237,11 @@ export default function UploadPage() {
 
   const { fields, append, remove } = useFieldArray({ control, name: 'rows' })
 
-  // Check sessionStorage for file dropped on the previous card
-  useEffect(() => {
-    const name = sessionStorage.getItem('onboarding_file_name')
-    if (name) {
-      sessionStorage.removeItem('onboarding_file_name')
-      sessionStorage.removeItem('onboarding_file_type')
-    }
-  }, [])
+  // Count rows with no cost set (valid but will trigger a warning banner)
+  const watchedRows = useWatch({ control, name: 'rows' })
+  const missingCostCount = watchedRows.filter(
+    (r) => validateIngredientCost(r?.unit_cost).warn
+  ).length
 
   function showToast(msg: string, ok: boolean) {
     setToast({ msg, ok })
@@ -324,6 +323,15 @@ export default function UploadPage() {
       }
     }
   }, [reset])
+
+  // If the welcome screen's global drag-drop deposited a file, process it now.
+  useEffect(() => {
+    const file = getPendingFile()
+    if (file) {
+      clearPendingFile()
+      processFile(file)
+    }
+  }, [processFile])
 
   function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -630,7 +638,14 @@ export default function UploadPage() {
           {errors.rows && (
             <div className="mt-3 flex items-center gap-2 text-xs text-yellow-400">
               <AlertCircle size={13} />
-              Fix highlighted fields before saving. Name and Unit are required; Cost must be &gt; 0 if provided.
+              Fix highlighted fields before saving. Name and Unit are required; Cost cannot be $0.00 or negative.
+            </div>
+          )}
+
+          {/* Zero-cost warning */}
+          {!errors.rows && missingCostCount > 0 && (
+            <div className="mt-3">
+              <ZeroCostWarning count={missingCostCount} />
             </div>
           )}
 

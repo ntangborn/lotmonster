@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   useForm,
@@ -8,6 +8,8 @@ import {
   useWatch,
   Control,
 } from 'react-hook-form'
+import { validateIngredientCost } from '@/lib/validation'
+import { ZeroCostWarning } from '@/components/zero-cost-warning'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import {
@@ -80,8 +82,13 @@ const ingredientSchema = z.object({
 }).superRefine((val, ctx) => {
   if (val.pricingMode === 'direct') {
     const v = Number(val.unitCost)
-    if (!val.unitCost || isNaN(v) || v <= 0) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Must be > 0', path: ['unitCost'] })
+    if (!val.unitCost || isNaN(v)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Required', path: ['unitCost'] })
+    } else {
+      const result = validateIngredientCost(v)
+      if (!result.valid) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: result.error!, path: ['unitCost'] })
+      }
     }
   } else {
     const paid = Number(val.totalPaid)
@@ -504,17 +511,58 @@ import { Controller } from 'react-hook-form'
 // Main page
 // ---------------------------------------------------------------------------
 
+function stagedToRows(staged: unknown[]): IngredientRow[] {
+  return staged.map((item) => {
+    const s = item as Record<string, unknown>
+    return {
+      ...BLANK,
+      name: typeof s.name === 'string' ? s.name : '',
+      sku: typeof s.sku === 'string' ? s.sku : '',
+      unit: (UNITS as readonly string[]).includes(s.unit as string)
+        ? (s.unit as IngredientRow['unit'])
+        : 'oz',
+      category: typeof s.category === 'string' ? s.category : '',
+      unitCost: typeof s.unit_cost === 'number' ? String(s.unit_cost) : '',
+    }
+  }).filter((r) => r.name.trim().length > 0)
+}
+
 export default function ManualPage() {
   const router = useRouter()
   const [saving, setSaving] = useState(false)
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null)
 
-  const { control, handleSubmit, formState: { errors } } = useForm<FormValues>({
+  const { control, handleSubmit, formState: { errors }, reset } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: { ingredients: [BLANK] },
   })
 
   const { fields, append, remove } = useFieldArray({ control, name: 'ingredients' })
+
+  // Count ingredients where direct-mode cost is empty (valid but will warn)
+  const watchedIngredients = useWatch({ control, name: 'ingredients' })
+  const missingCostCount = watchedIngredients.filter((ing) => {
+    if (!ing) return false
+    if (ing.pricingMode === 'direct') return validateIngredientCost(ing.unitCost).warn
+    // bulk mode: cost is derived; warn if inputs are missing
+    return !ing.totalPaid || !ing.totalQty
+  }).length
+
+  // Pre-fill from chat "Edit as Form" escape hatch
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem('onboarding_staged_ingredients')
+      if (!raw) return
+      sessionStorage.removeItem('onboarding_staged_ingredients')
+      const parsed: unknown = JSON.parse(raw)
+      if (!Array.isArray(parsed) || parsed.length === 0) return
+      const rows = stagedToRows(parsed)
+      if (rows.length > 0) reset({ ingredients: rows })
+    } catch {
+      // ignore
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   function showToast(msg: string, ok: boolean) {
     setToast({ msg, ok })
@@ -583,6 +631,9 @@ export default function ManualPage() {
           <Plus size={16} />
           Add Another Ingredient
         </button>
+
+        {/* Zero-cost warning */}
+        {missingCostCount > 0 && <ZeroCostWarning count={missingCostCount} />}
 
         {/* Summary + save */}
         <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.03] px-5 py-4">

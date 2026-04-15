@@ -2,77 +2,65 @@
 
 /**
  * Client-side auth callback page.
- *
- * Uses Supabase's implicit flow: the magic link redirects here with tokens
- * in the URL hash (#access_token=...&refresh_token=...). createBrowserClient
- * auto-detects the hash on init and writes session cookies; we just wait for
- * the session to be established, then route the user.
+ * Performs PKCE exchange and surfaces cookie state on failure for diagnosis.
  */
 
-import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { Suspense, useEffect } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
-export default function AuthCallbackPage() {
+function CallbackHandler() {
   const router = useRouter()
-  const [message, setMessage] = useState('Signing you in…')
+  const searchParams = useSearchParams()
 
   useEffect(() => {
-    const supabase = createClient()
-
-    // Surface token errors returned in the hash (e.g. expired magic link)
-    const hash = window.location.hash.slice(1)
-    const params = new URLSearchParams(hash)
-    const hashError = params.get('error_description') || params.get('error')
-    if (hashError) {
-      const reason = encodeURIComponent(hashError.slice(0, 200))
-      router.replace(`/login?error=auth_callback_failed&reason=${reason}`)
+    const code = searchParams.get('code')
+    if (!code) {
+      router.replace('/login?error=auth_callback_failed&reason=no_code')
       return
     }
 
-    let done = false
+    const supabase = createClient()
 
-    const route = (createdAtIso: string | undefined) => {
-      if (done) return
-      done = true
-      const createdAt = createdAtIso ? new Date(createdAtIso).getTime() : 0
-      const isNewUser = Date.now() - createdAt < 60_000
-      router.replace(isNewUser ? '/dashboard/onboarding' : '/dashboard')
-    }
-
-    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_IN' && session) {
-        route(session.user.created_at)
-      }
-    })
-
-    // Fallback: if the hash was already consumed on mount, getSession returns
-    // the session without firing SIGNED_IN again.
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) route(session.user.created_at)
-    })
-
-    // Safety timeout — if nothing happened in 8s, the hash was invalid/missing.
-    // Surface what we actually received so we can diagnose.
-    const timeout = setTimeout(() => {
-      if (!done) {
-        const hashSample = window.location.hash.slice(0, 200) || '(empty)'
-        const querySample = window.location.search.slice(0, 200) || '(empty)'
-        const debug = `no_session hash=${hashSample} query=${querySample}`
+    supabase.auth.exchangeCodeForSession(code).then(({ data, error }) => {
+      if (error) {
+        // Snapshot Supabase cookie names so we can see if verifier existed
+        const cookieNames = document.cookie
+          .split(';')
+          .map((c) => c.trim().split('=')[0])
+          .filter((n) => n.startsWith('sb-'))
+          .join(',')
+        const debug = `${error.message} cookies=[${cookieNames}]`
         const reason = encodeURIComponent(debug.slice(0, 400))
         router.replace(`/login?error=auth_callback_failed&reason=${reason}`)
+        return
       }
-    }, 8000)
 
-    return () => {
-      sub.subscription.unsubscribe()
-      clearTimeout(timeout)
-    }
+      const createdAt = data.user?.created_at
+        ? new Date(data.user.created_at).getTime()
+        : 0
+      const isNewUser = Date.now() - createdAt < 60_000
+      router.replace(isNewUser ? '/dashboard/onboarding' : '/dashboard')
+    })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-[#0D1B2A]">
-      <p className="text-sm text-white/40">{message}</p>
+      <p className="text-sm text-white/40">Signing you in…</p>
     </div>
+  )
+}
+
+export default function AuthCallbackPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center bg-[#0D1B2A]">
+          <p className="text-sm text-white/40">Loading…</p>
+        </div>
+      }
+    >
+      <CallbackHandler />
+    </Suspense>
   )
 }

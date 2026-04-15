@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 
 type State = 'idle' | 'loading' | 'sent' | 'error'
@@ -9,6 +9,16 @@ export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [state, setState] = useState<State>('idle')
   const [errorMsg, setErrorMsg] = useState('')
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const err = params.get('error')
+    const reason = params.get('reason')
+    if (err) {
+      setErrorMsg(reason ? `${err}: ${reason}` : err)
+      setState('error')
+    }
+  }, [])
 
   const supabase = createClient()
 
