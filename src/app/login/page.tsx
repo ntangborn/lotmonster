@@ -47,7 +47,7 @@ export default function LoginPage() {
   async function handleVerifyCode(e: React.FormEvent) {
     e.preventDefault()
     const token = code.trim()
-    if (token.length < 6) return
+    if (token.length < 6 || token.length > 10) return
     setState('verifying')
     setErrorMsg('')
 
@@ -109,15 +109,15 @@ export default function LoginPage() {
         {state === 'awaiting_code' || state === 'verifying' ? (
           <form onSubmit={handleVerifyCode} className="space-y-3">
             <p className="text-sm text-white/70">
-              We sent a 6-digit code to <span className="text-white">{email}</span>
+              We sent a code to <span className="text-white">{email}</span>
             </p>
             <input
               type="text"
               inputMode="numeric"
-              pattern="[0-9]{6}"
-              maxLength={6}
+              pattern="[0-9]{6,10}"
+              maxLength={10}
               required
-              placeholder="123456"
+              placeholder="12345678"
               value={code}
               onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
               disabled={isBusy}
@@ -127,6 +127,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={isBusy || code.length < 6}
+
               className="w-full rounded-lg bg-teal-500 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-teal-400 disabled:opacity-50"
             >
               {state === 'verifying' ? 'Verifying…' : 'Sign in'}

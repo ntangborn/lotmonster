@@ -52,7 +52,7 @@ export default function SignupPage() {
   async function handleVerifyCode(e: React.FormEvent) {
     e.preventDefault()
     const token = code.trim()
-    if (token.length < 6) return
+    if (token.length < 6 || token.length > 10) return
     setState('verifying')
     setErrorMsg('')
 
@@ -94,15 +94,15 @@ export default function SignupPage() {
         {state === 'awaiting_code' || state === 'verifying' ? (
           <form onSubmit={handleVerifyCode} className="space-y-3">
             <p className="text-sm text-white/70">
-              We sent a 6-digit code to <span className="text-white">{email}</span>
+              We sent a code to <span className="text-white">{email}</span>
             </p>
             <input
               type="text"
               inputMode="numeric"
-              pattern="[0-9]{6}"
-              maxLength={6}
+              pattern="[0-9]{6,10}"
+              maxLength={10}
               required
-              placeholder="123456"
+              placeholder="12345678"
               value={code}
               onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
               disabled={isBusy}
