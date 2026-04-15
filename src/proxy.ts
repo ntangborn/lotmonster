@@ -70,7 +70,7 @@ export async function proxy(request: NextRequest) {
 
   // --- Protected routes: require a valid session ---
   if (isProtected(pathname)) {
-    const claims = getClaims(request)
+    const claims = await getClaims(request)
 
     if (!claims) {
       const loginUrl = request.nextUrl.clone()

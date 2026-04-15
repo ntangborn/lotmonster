@@ -1,5 +1,4 @@
 import { createServerClient } from '@supabase/ssr'
-import { decodeJwt } from 'jose'
 import type { NextRequest } from 'next/server'
 import type { Database } from '@/types/database'
 
@@ -11,55 +10,36 @@ export interface SessionClaims {
 }
 
 /**
- * Decodes the Supabase JWT from the request cookies without a network round-trip.
- * Used in the middleware layer where performance matters — avoids a getUser() call
- * on every request.
+ * Reads the Supabase session from request cookies using the SSR client so
+ * it correctly handles base64url encoding and chunked cookies. Returns null
+ * if no valid session is present.
  *
- * Returns null if no session cookie is present or the token is malformed/expired.
+ * Uses getUser() which triggers a JWT verification round-trip to Supabase —
+ * a few tens of ms in Edge runtime. If we ever need this faster, switch to
+ * getClaims() once it ships in @supabase/ssr, or decode locally with JWKS.
  */
-export function getClaims(request: NextRequest): SessionClaims | null {
-  try {
-    // Supabase stores the session under sb-<project-ref>-auth-token
-    // We find it by prefix rather than hardcoding the project ref.
-    const sessionCookie = request.cookies
-      .getAll()
-      .find((c) => c.name.startsWith('sb-') && c.name.endsWith('-auth-token'))
+export async function getClaims(
+  request: NextRequest
+): Promise<SessionClaims | null> {
+  const dummyHeaders = new Headers()
+  const supabase = createProxyClient(request, { headers: dummyHeaders })
 
-    if (!sessionCookie?.value) return null
+  const { data, error } = await supabase.auth.getUser()
+  if (error || !data.user) return null
 
-    // The cookie value is a JSON array: [access_token, refresh_token]
-    let accessToken: string
-    try {
-      const parsed = JSON.parse(sessionCookie.value)
-      accessToken = Array.isArray(parsed) ? parsed[0] : parsed.access_token
-    } catch {
-      // If it's not JSON, treat the raw value as the access token
-      accessToken = sessionCookie.value
-    }
-
-    if (!accessToken) return null
-
-    const payload = decodeJwt(accessToken)
-
-    // Validate expiry
-    const now = Math.floor(Date.now() / 1000)
-    if (payload.exp && payload.exp < now) return null
-
-    return {
-      sub: payload.sub ?? '',
-      email: (payload.email as string) ?? '',
-      role: (payload.role as string) ?? 'authenticated',
-      org_id: (payload.org_id as string) ?? '',
-    }
-  } catch {
-    return null
+  const meta = data.user.app_metadata as Record<string, unknown> | undefined
+  return {
+    sub: data.user.id,
+    email: data.user.email ?? '',
+    role: (meta?.role as string) ?? 'authenticated',
+    org_id: (meta?.org_id as string) ?? '',
   }
 }
 
 /**
- * Creates a Supabase server client suitable for use inside Next.js middleware
- * (proxy.ts). Reads/writes cookies via NextRequest + NextResponse rather than
- * next/headers, which is not available in the Edge runtime.
+ * Creates a Supabase server client for use inside Next.js middleware (proxy.ts).
+ * Reads/writes cookies via NextRequest + NextResponse instead of next/headers,
+ * which isn't available in the Edge runtime.
  */
 export function createProxyClient(
   request: NextRequest,
@@ -78,7 +58,6 @@ export function createProxyClient(
             request.cookies.set(name, value)
             response.headers.append(
               'Set-Cookie',
-              // Build a minimal Set-Cookie string; Supabase provides serialized options
               `${name}=${value}; Path=${options?.path ?? '/'}${
                 options?.maxAge != null ? `; Max-Age=${options.maxAge}` : ''
               }${options?.httpOnly ? '; HttpOnly' : ''}${
