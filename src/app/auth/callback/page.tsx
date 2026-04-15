@@ -52,11 +52,15 @@ export default function AuthCallbackPage() {
       if (session) route(session.user.created_at)
     })
 
-    // Safety timeout — if nothing happened in 8s, the hash was invalid/missing
+    // Safety timeout — if nothing happened in 8s, the hash was invalid/missing.
+    // Surface what we actually received so we can diagnose.
     const timeout = setTimeout(() => {
       if (!done) {
-        setMessage('Auth failed.')
-        router.replace('/login?error=auth_callback_failed&reason=no_session')
+        const hashSample = window.location.hash.slice(0, 200) || '(empty)'
+        const querySample = window.location.search.slice(0, 200) || '(empty)'
+        const debug = `no_session hash=${hashSample} query=${querySample}`
+        const reason = encodeURIComponent(debug.slice(0, 400))
+        router.replace(`/login?error=auth_callback_failed&reason=${reason}`)
       }
     }, 8000)
 
