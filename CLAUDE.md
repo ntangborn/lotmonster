@@ -204,17 +204,38 @@ curl -sk --ssl-no-revoke -X PATCH \
 - Uses `unit_cost_at_use` snapshot — completed runs are immutable when
   lot prices change later
 
-### QuickBooks OAuth (`/api/qbo/*`)
+### QuickBooks OAuth + Sync (`/api/qbo/*`)
 - `src/lib/qbo/`:
   - `encryption.ts` — AES-256-GCM at rest (`v1.<iv>.<ct>.<tag>`)
-  - `tokens.ts` — exchange/refresh, in-process access cache, persists
-    rotated refresh token, typed `QBONotConnectedError` /
-    `QBOTokenExpiredError`
+  - `tokens.ts` — exchange/refresh, in-process access cache w/ 5-min
+    buffer, persists rotated refresh token, **auto-disconnects on
+    persistent 401 / expired refresh**, typed `QBONotConnectedError`
+    / `QBOTokenExpiredError`
   - `client.ts` — `qboFetch` / `qboJson<T>` w/ sandbox/prod base URL,
-    `?minorversion=75` pinning, one-shot 401 retry
-- API: `GET /api/qbo/connect` (CSRF state cookie binds nonce + orgId),
+    `?minorversion=75` pinning, one-shot 401 retry → disconnect on
+    persistent failure
+- OAuth: `GET /api/qbo/connect` (CSRF state cookie binds nonce + orgId),
   `GET /api/qbo/callback` (verifies state + orgId match), `POST /api/qbo/disconnect`
-- Sync cron not yet built — `qbo_sync_log` rows are written but not consumed
+- Sync routes (cron + user auth modes; idempotent via stored doc IDs):
+  - `POST /api/qbo/sync/journal-entry` — completed run → balanced JE
+    (Debit COGS / Credit Inventory). Stores `production_runs.qbo_journal_entry_id`.
+  - `POST /api/qbo/sync/invoice` — shipped SO → Invoice with
+    SalesItemLineDetail, find-or-create Customer by name. Stores
+    `sales_orders.qbo_invoice_id`, promotes status to 'invoiced'.
+  - `POST /api/qbo/sync/bill` — received PO → Bill with
+    AccountBasedExpenseLineDetail (uses inventory account), find-or-
+    create Vendor by name. Stores `purchase_orders.qbo_bill_id`.
+- Migrations 003/004/005 add: encrypted refresh token + expiry +
+  environment + connected_at; account mappings (cogs / inventory /
+  ar / ap / default_item / income); doc id columns
+  (`qbo_journal_entry_id`, `qbo_bill_id`, `qbo_invoice_id`).
+- Reference: `docs/qbo-oauth2-reference.md` (committed)
+- Sync cron worker not built — `qbo_sync_log` rows are written by
+  ship/receive/complete actions but no automated dispatcher consumes
+  them yet. The sync routes themselves are idempotent and safe to
+  hit manually.
+- One-bill-per-PO limitation noted in bill route — multiple partial
+  receipts on one PO won't generate multiple bills.
 
 ### AI Routes
 - `src/app/api/ai/extract-ingredients/route.ts` — Claude Vision for images/PDFs
@@ -283,11 +304,12 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 ## What's NOT Built Yet
 - Settings page (`/dashboard/settings`) — QBO connect/disconnect UI,
-  org settings, member management
-- QBO sync cron — consumes `qbo_sync_log` pending rows and posts
-  Bills (from receives), Journal Entries (from production runs),
-  Invoices (from sales orders) to QBO. See
-  `docs/qbo-oauth2-reference.md` for endpoint patterns.
+  account-mapping form (cogs/inventory/default item), org settings,
+  member management. **QBO callback redirects here today and 404s.**
+- QBO sync cron — sync routes exist but no dispatcher consumes
+  `qbo_sync_log` pending rows. Build a route at `/api/cron/qbo-sync`
+  guarded by `CRON_SECRET` that scans for status='pending' / 'failed'
+  rows and POSTs to the right `/api/qbo/sync/*` endpoint.
 - Recipe edit page (`/dashboard/recipes/[id]/edit`) — PATCH API works,
   needs UI
 - AI inventory assistant (`/dashboard/ai`) — sidebar link exists, page doesn't
@@ -296,3 +318,11 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 - Lot detail page (have list, no detail)
 - Forecasting / replenishment recommendations
 - Multi-user member management beyond signup-creates-org
+
+## Active issue (as of 2026-04-15)
+User reported a server-component render error after saving 6 ingredients
+on a fresh org "Lotmonster" via `/dashboard/onboarding/manual` ("Save
+All Ingredients"). The redirect goes to `/dashboard/ingredients` and
+that page throws. The browser hides the message in production builds.
+Vercel function logs have the full digest — to be investigated next
+session via Vercel CLI (`npx vercel login` already done).
