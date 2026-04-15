@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
-type State = 'idle' | 'loading' | 'error'
+type State = 'idle' | 'sending' | 'awaiting_code' | 'verifying' | 'error'
 
 function slugify(name: string): string {
   return name
@@ -18,31 +18,22 @@ export default function SignupPage() {
   const router = useRouter()
   const [email, setEmail] = useState('')
   const [orgName, setOrgName] = useState('')
+  const [code, setCode] = useState('')
   const [state, setState] = useState<State>('idle')
   const [errorMsg, setErrorMsg] = useState('')
 
   const supabase = createClient()
 
-  async function handleSignup(e: React.FormEvent) {
+  async function handleSendCode(e: React.FormEvent) {
     e.preventDefault()
     if (!email.trim() || !orgName.trim()) return
-    setState('loading')
+    setState('sending')
     setErrorMsg('')
 
-    const callbackUrl =
-      typeof window !== 'undefined'
-        ? `${window.location.origin}/auth/callback`
-        : `${process.env.NEXT_PUBLIC_APP_URL}/auth/callback`
-
-    // 1. Create the auth user via magic link (OTP).
-    //    On first sign-in the user record is created; org wiring
-    //    happens via a Supabase trigger or the callback route.
-    //    We pass orgName in email metadata so the callback/trigger
-    //    can create the org record.
-    const { error: otpError } = await supabase.auth.signInWithOtp({
+    const { error } = await supabase.auth.signInWithOtp({
       email: email.trim(),
       options: {
-        emailRedirectTo: callbackUrl,
+        shouldCreateUser: true,
         data: {
           org_name: orgName.trim(),
           org_slug: slugify(orgName.trim()),
@@ -50,22 +41,41 @@ export default function SignupPage() {
       },
     })
 
-    if (otpError) {
-      setErrorMsg(otpError.message)
+    if (error) {
+      setErrorMsg(error.message)
+      setState('error')
+      return
+    }
+    setState('awaiting_code')
+  }
+
+  async function handleVerifyCode(e: React.FormEvent) {
+    e.preventDefault()
+    const token = code.trim()
+    if (token.length < 6) return
+    setState('verifying')
+    setErrorMsg('')
+
+    const { error } = await supabase.auth.verifyOtp({
+      email: email.trim(),
+      token,
+      type: 'email',
+    })
+
+    if (error) {
+      setErrorMsg(error.message)
       setState('error')
       return
     }
 
-    // 2. After OTP is sent, redirect to a confirmation screen.
-    //    Org + org_member rows are created server-side in the
-    //    callback route once the user confirms their email.
-    router.push(`/signup/confirm?email=${encodeURIComponent(email.trim())}`)
+    router.replace('/dashboard/onboarding')
   }
+
+  const isBusy = state === 'sending' || state === 'verifying'
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-center bg-[#0D1B2A] px-4">
       <div className="w-full max-w-sm rounded-2xl bg-white/5 border border-white/10 p-8 shadow-xl">
-        {/* Brand */}
         <div className="mb-8 text-center">
           <h1 className="text-3xl font-bold tracking-tight text-white">
             Lotmonster
@@ -75,74 +85,106 @@ export default function SignupPage() {
           </p>
         </div>
 
-        {/* Error banner */}
-        {state === 'error' && (
+        {errorMsg && (
           <div className="mb-4 rounded-lg bg-red-500/10 border border-red-500/30 px-4 py-3">
             <p className="text-sm text-red-400">{errorMsg}</p>
           </div>
         )}
 
-        <form onSubmit={handleSignup} className="space-y-3">
-          <div>
-            <label
-              htmlFor="org"
-              className="mb-1 block text-xs font-medium text-white/50"
-            >
-              Company / Brand name
-            </label>
+        {state === 'awaiting_code' || state === 'verifying' ? (
+          <form onSubmit={handleVerifyCode} className="space-y-3">
+            <p className="text-sm text-white/70">
+              We sent a 6-digit code to <span className="text-white">{email}</span>
+            </p>
             <input
-              id="org"
               type="text"
+              inputMode="numeric"
+              pattern="[0-9]{6}"
+              maxLength={6}
               required
-              placeholder="Lone Star Heat"
-              value={orgName}
-              onChange={(e) => setOrgName(e.target.value)}
-              disabled={state === 'loading'}
-              className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-white placeholder:text-white/30 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 disabled:opacity-50"
+              placeholder="123456"
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+              disabled={isBusy}
+              autoFocus
+              className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-2.5 text-center text-lg font-mono tracking-widest text-white placeholder:text-white/30 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 disabled:opacity-50"
             />
-          </div>
-
-          <div>
-            <label
-              htmlFor="email"
-              className="mb-1 block text-xs font-medium text-white/50"
+            <button
+              type="submit"
+              disabled={isBusy || code.length < 6}
+              className="w-full rounded-lg bg-teal-500 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-teal-400 disabled:opacity-50"
             >
-              Work email
-            </label>
-            <input
-              id="email"
-              type="email"
-              required
-              placeholder="you@yourcompany.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              disabled={state === 'loading'}
-              className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-white placeholder:text-white/30 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 disabled:opacity-50"
-            />
-          </div>
+              {state === 'verifying' ? 'Verifying…' : 'Create account'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setCode('')
+                setErrorMsg('')
+                setState('idle')
+              }}
+              className="w-full text-xs text-white/40 underline underline-offset-2 hover:text-white/70"
+            >
+              Start over
+            </button>
+          </form>
+        ) : (
+          <form onSubmit={handleSendCode} className="space-y-3">
+            <div>
+              <label htmlFor="org" className="mb-1 block text-xs font-medium text-white/50">
+                Company / Brand name
+              </label>
+              <input
+                id="org"
+                type="text"
+                required
+                placeholder="Lone Star Heat"
+                value={orgName}
+                onChange={(e) => setOrgName(e.target.value)}
+                disabled={isBusy}
+                className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-white placeholder:text-white/30 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 disabled:opacity-50"
+              />
+            </div>
 
-          <button
-            type="submit"
-            disabled={state === 'loading'}
-            className="w-full rounded-lg bg-teal-500 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-teal-400 disabled:opacity-50"
-          >
-            {state === 'loading' ? 'Creating account…' : 'Create free account'}
-          </button>
-        </form>
+            <div>
+              <label htmlFor="email" className="mb-1 block text-xs font-medium text-white/50">
+                Work email
+              </label>
+              <input
+                id="email"
+                type="email"
+                required
+                placeholder="you@yourcompany.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                disabled={isBusy}
+                className="w-full rounded-lg border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-white placeholder:text-white/30 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 disabled:opacity-50"
+              />
+            </div>
 
-        <p className="mt-6 text-center text-xs text-white/30">
-          14-day free trial · No credit card required
-        </p>
+            <button
+              type="submit"
+              disabled={isBusy}
+              className="w-full rounded-lg bg-teal-500 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-teal-400 disabled:opacity-50"
+            >
+              {state === 'sending' ? 'Sending code…' : 'Create free account'}
+            </button>
 
-        <p className="mt-4 text-center text-xs text-white/30">
-          Already have an account?{' '}
-          <a
-            href="/login"
-            className="text-teal-400 underline underline-offset-2 hover:text-teal-300"
-          >
-            Sign in
-          </a>
-        </p>
+            <p className="mt-2 text-center text-xs text-white/30">
+              14-day free trial · No credit card required
+            </p>
+
+            <p className="mt-4 text-center text-xs text-white/30">
+              Already have an account?{' '}
+              <a
+                href="/login"
+                className="text-teal-400 underline underline-offset-2 hover:text-teal-300"
+              >
+                Sign in
+              </a>
+            </p>
+          </form>
+        )}
       </div>
     </main>
   )
