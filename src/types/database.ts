@@ -35,6 +35,8 @@ export interface Database {
           qbo_inventory_account_id: string | null
           qbo_ar_account_id: string | null
           qbo_ap_account_id: string | null
+          qbo_default_item_id: string | null
+          qbo_income_account_id: string | null
           created_at: string
           updated_at: string
         }
@@ -53,6 +55,8 @@ export interface Database {
           qbo_inventory_account_id?: string | null
           qbo_ar_account_id?: string | null
           qbo_ap_account_id?: string | null
+          qbo_default_item_id?: string | null
+          qbo_income_account_id?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -71,6 +75,8 @@ export interface Database {
           qbo_inventory_account_id?: string | null
           qbo_ar_account_id?: string | null
           qbo_ap_account_id?: string | null
+          qbo_default_item_id?: string | null
+          qbo_income_account_id?: string | null
           updated_at?: string
         }
         Relationships: []
