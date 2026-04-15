@@ -36,6 +36,7 @@ yarn-error.log*
 
 # credentials — never commit
 docs/env\ keys.txt
+docs/oauth\ for\ qbo\ secrets.txt
 README.md.bak
 
 # vercel
