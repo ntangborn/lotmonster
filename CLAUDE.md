@@ -313,18 +313,64 @@ Generate the QBO encryption key with:
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-## What's NOT Built Yet
-- Settings page (`/dashboard/settings`) — QBO connect/disconnect UI,
-  account-mapping form (cogs/inventory/default item), org settings,
-  member management. **QBO callback redirects here today and 404s.**
-- QBO sync cron — sync routes exist but no dispatcher consumes
-  `qbo_sync_log` pending rows. Build a route at `/api/cron/qbo-sync`
-  guarded by `CRON_SECRET` that scans for status='pending' / 'failed'
-  rows and POSTs to the right `/api/qbo/sync/*` endpoint.
+## Build Plan — Authoritative Source
+
+**The original `docs/lotmonster-build-guide-v3.md` is authoritative for
+Parts 0–8 only.** From here forward, follow:
+
+- **`docs/plans/2026-04-16-build-plan-revised-from-part-9.md`** — the
+  master plan from this point to contest submission. ~23 working days,
+  estimated finish ~2026-05-10. Contains 9A (test existing), 9B (verify
+  QBO), 9 (SKUs), 10 (AI assistant — rewritten with finished-goods
+  awareness), 11 (cron + QBO sync dispatcher), 12 (Stripe), 13 (demo
+  seeder + polish), 14 (security + submission), 15 (phase 2/3 backlog).
+- **`docs/plans/2026-04-16-skus-and-finished-goods.md`** — full schema
+  spec referenced from Part 9. Models packaging components as
+  `ingredients` rows with `kind = 'raw' | 'packaging'`, finished
+  goods as polymorphic `lots` rows (`sku_id` XOR `ingredient_id`),
+  multi-SKU runs with split liquid/packaging COGS.
+
+Old guide → new plan map:
+- Original Part 9 (AI) → new Part 10
+- Original Part 10 (Cron) → new Part 11
+- Original Part 11 (Stripe) → new Part 12
+- Original Part 12 (Demo Seeder) → new Part 13
+- Original Part 13 (Security/Submission) → new Part 14
+- Original Parts 14–15 (Troubleshooting/Checklist) → folded into the
+  relevant new parts; troubleshooting stays in the original guide as
+  reference.
+
+## What's NOT Built Yet (sequenced by the new plan)
+
+Each item now has a home in the revised plan. Rough order of operations:
+
+- **Part 9A (next):** End-to-end manual test of all completed features
+  in production. Plan has the click-by-click test script.
+- **Part 9B:** QBO end-to-end verification using sandbox company
+  `Sandbox Company US 74a4` (realm `9341456849762719`). Account
+  mappings are still direct-DB-insert (no UI yet — settings shell is
+  Part 13).
+- **Part 9 (SKUs + Finished Goods):** Migrations 007+, polymorphic
+  lots, packaging-as-ingredients, multi-SKU `completeRun` rewrite,
+  finished-goods FEFO. *This is the highest-risk milestone — the
+  `completeRun` rewrite touches 5 tables atomically with best-effort
+  rollback.*
+- **Part 10:** AI assistant (`/dashboard/ai` page + 10–11 Claude
+  tool_use RPC functions, several rewritten to acknowledge finished
+  goods + packaging).
+- **Part 11:** `/api/cron/qbo-sync` dispatcher (Vercel cron on
+  every-15-min cadence — *requires Vercel Pro*; Hobby is 1/day).
+- **Part 12:** Stripe billing.
+- **Part 13:** Demo seeder + polish, including the `/dashboard/settings`
+  shell that fixes the QBO callback 404.
+- **Part 14:** Security audit + contest submission (rotate the leaked
+  service-role key + Supabase access token *before* submission, not
+  after).
+
+Other existing TODOs not in the new plan (phase 2/3 backlog at the end
+of the revised plan):
 - Recipe edit page (`/dashboard/recipes/[id]/edit`) — PATCH API works,
   needs UI
-- AI inventory assistant (`/dashboard/ai`) — sidebar link exists, page doesn't
-- Stripe billing
 - Real landing page
 - Lot detail page (have list, no detail)
 - Forecasting / replenishment recommendations
