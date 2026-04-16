@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Image from 'next/image'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
@@ -51,7 +52,14 @@ export function DashboardShell({ orgName, userEmail, children }: ShellProps) {
   const sidebarContent = (
     <div className="flex h-full flex-col">
       {/* Logo */}
-      <div className="flex h-16 items-center border-b border-white/10 px-5">
+      <div className="flex h-16 items-center gap-2 border-b border-white/10 px-5">
+        <Image
+          src="/LotMonster_Favicon_32px.png"
+          alt=""
+          width={32}
+          height={32}
+          className="h-7 w-7"
+        />
         <span className="text-lg font-bold tracking-tight text-white">
           Lotmonster
         </span>

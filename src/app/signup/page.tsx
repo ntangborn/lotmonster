@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
@@ -76,11 +77,16 @@ export default function SignupPage() {
   return (
     <main className="flex min-h-screen flex-col items-center justify-center bg-[#0D1B2A] px-4">
       <div className="w-full max-w-sm rounded-2xl bg-white/5 border border-white/10 p-8 shadow-xl">
-        <div className="mb-8 text-center">
-          <h1 className="text-3xl font-bold tracking-tight text-white">
-            Lotmonster
-          </h1>
-          <p className="mt-1 text-sm text-white/50">
+        <div className="mb-8 flex flex-col items-center text-center">
+          <Image
+            src="/LotMonster_Logo_Transparent.png"
+            alt="Lotmonster"
+            width={270}
+            height={180}
+            priority
+            className="h-auto w-[180px]"
+          />
+          <p className="mt-2 text-sm text-white/50">
             Create your free account
           </p>
         </div>

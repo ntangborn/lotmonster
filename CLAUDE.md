@@ -111,6 +111,17 @@ curl -sk --ssl-no-revoke -X PATCH \
 - Migration 002: `CHECK (unit_cost > 0)` on lots table
 - Migration 003: QBO credential columns on `orgs` (encrypted refresh token,
   expiry, environment, connected_at) — applied via Management API
+- Migration 006: **every new user gets a solo org**.
+  `public.handle_new_user()` fires AFTER INSERT on `auth.users`, calls
+  `public.ensure_org_for_user(uuid)` (SECURITY DEFINER, idempotent) which
+  creates the `orgs` row + `org_members(role='owner')` using
+  `raw_user_meta_data.org_name/org_slug`. Falls back to `full_name`-based or
+  email-prefix name for Google OAuth signups that have no org metadata.
+  Also stamps `org_id` into `raw_app_meta_data` so `current_org_id()` works
+  after the user's next session refresh. Adds `org_members_self_select`
+  policy (`user_id = auth.uid()`) so `resolveOrgId()` can read the
+  membership before the JWT carries `org_id`. Backfill DO-block
+  retroactively created orgs for any orphan `auth.users` rows.
 
 ### Homepage + Dashboard
 - Placeholder homepage with Sign Up / Log In CTAs (`src/app/page.tsx`)
@@ -319,10 +330,18 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 - Forecasting / replenishment recommendations
 - Multi-user member management beyond signup-creates-org
 
-## Active issue (as of 2026-04-15)
-User reported a server-component render error after saving 6 ingredients
-on a fresh org "Lotmonster" via `/dashboard/onboarding/manual` ("Save
-All Ingredients"). The redirect goes to `/dashboard/ingredients` and
-that page throws. The browser hides the message in production builds.
-Vercel function logs have the full digest — to be investigated next
-session via Vercel CLI (`npx vercel login` already done).
+## Recently resolved
+
+### 2026-04-16 — "No organization found for this user." on save
+Vercel prod logs (`vercel logs --level error`) showed two
+`POST /dashboard/onboarding/manual` errors thrown at
+`src/lib/actions/ingredients.ts:36`. Root cause: signup stashed
+`org_name`/`org_slug` in `raw_user_meta_data` but nothing created the
+`orgs` + `org_members` rows — every call to `resolveOrgId` failed for
+fresh users. Fixed by migration 006 (see Database section). Four
+existing orphan users were backfilled as part of the same migration
+("Tangborn's Hot Sauce", "QA Test Sauces", "QA Test Brand", "test").
+
+Vercel CLI is now installed globally (`npm i -g vercel`), authed as
+`ntangborn-3191`, and `.vercel/project.json` links this repo to the
+`lotmonster` project.

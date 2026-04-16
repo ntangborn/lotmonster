@@ -1,11 +1,17 @@
+import Image from 'next/image'
 import Link from 'next/link'
 
 export default function Home() {
   return (
     <main className="flex min-h-screen flex-col items-center justify-center bg-[#0D1B2A] px-4 text-center">
-      <h1 className="text-6xl font-bold tracking-tight text-white sm:text-7xl md:text-8xl">
-        LOTMONSTER
-      </h1>
+      <Image
+        src="/LotMonster_Logo_Transparent.png"
+        alt="Lotmonster"
+        width={640}
+        height={427}
+        priority
+        className="h-auto w-[min(80vw,640px)]"
+      />
       <p className="mt-4 max-w-2xl text-lg text-white/70 sm:text-xl">
         The Alternative Solution for CPG Inventory and Replenishment
       </p>
