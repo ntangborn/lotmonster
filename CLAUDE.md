@@ -2,6 +2,43 @@
 
 # Lotmonster — Project Status & Handoff
 
+## Session Handoff — Start Here
+
+**Status as of 2026-04-16:** user is mid-way through **Part 9A** — manual
+end-to-end testing of existing features in production at
+https://www.lotmonster.co.
+
+**First thing to read:** `docs/part-9a-test-checklist.md` — the 13-section
+printable checklist the user is ticking through. 90-min estimate.
+**`docs/lotmonster-build-guide-v4.md`** is authoritative for everything
+from Part 9 onward (supersedes the v3 guide's Parts 9–15). Contest deadline
+is **Jun 2, 2026 23:59 PT** — submission portal
+https://bdb.perplexityfund.ai/register; details in v4 Part 14.
+
+**When the user reports a test failure**, triage with:
+```bash
+vercel logs --no-follow --since 30m --level error --expand
+```
+
+**Immediate sequence after 9A passes:** Part 9B (QBO end-to-end against
+sandbox company `Sandbox Company US 74a4`, realm `9341456849762719`) →
+Part 9 SKUs + finished-goods build (~8.5 days, highest-risk milestone is
+the `completeRun` rewrite).
+
+**Tools already configured:**
+- Vercel CLI globally installed, authed as `ntangborn-3191`, repo linked
+  (`.vercel/project.json` present)
+- Supabase CLI linked to project `vvoyidhqlxjcuhhsdiyy`
+- All env vars synced between `.env.local` and Vercel production
+- Git auto-deploys on push to `main` (verified working; do not `vercel --prod`
+  from local — it builds a Windows-specific bundle that broke auth once)
+- Migration 006 is applied (auto-create org + owner membership on signup)
+
+**Don't start writing code for Part 9 until 9A passes.** The user wants to
+verify the existing system is rock-solid before layering in SKUs.
+
+---
+
 ## What This Project Is
 AI-native inventory + replenishment system for small CPG manufacturers.
 Entered in the Perplexity Billion Dollar Build contest.
@@ -376,18 +413,54 @@ of the revised plan):
 - Forecasting / replenishment recommendations
 - Multi-user member management beyond signup-creates-org
 
-## Recently resolved
+## Recently resolved (2026-04-16 session)
 
-### 2026-04-16 — "No organization found for this user." on save
-Vercel prod logs (`vercel logs --level error`) showed two
-`POST /dashboard/onboarding/manual` errors thrown at
-`src/lib/actions/ingredients.ts:36`. Root cause: signup stashed
+### "No organization found for this user." on save
+Vercel prod logs showed `POST /dashboard/onboarding/manual` errors
+thrown at `src/lib/actions/ingredients.ts:36`. Root cause: signup stashed
 `org_name`/`org_slug` in `raw_user_meta_data` but nothing created the
 `orgs` + `org_members` rows — every call to `resolveOrgId` failed for
-fresh users. Fixed by migration 006 (see Database section). Four
-existing orphan users were backfilled as part of the same migration
-("Tangborn's Hot Sauce", "QA Test Sauces", "QA Test Brand", "test").
+fresh users. Fixed by migration 006 (see Database section). Four existing
+orphan users were backfilled as part of the same migration ("Tangborn's
+Hot Sauce", "QA Test Sauces", "QA Test Brand", "test").
 
-Vercel CLI is now installed globally (`npm i -g vercel`), authed as
-`ntangborn-3191`, and `.vercel/project.json` links this repo to the
-`lotmonster` project.
+### Vercel CLI + env sync
+Vercel CLI installed globally, authed as `ntangborn-3191`, repo linked.
+Production env vars synced from `.env.local`: `SUPABASE_SERVICE_ROLE_KEY`,
+`ANTHROPIC_API_KEY`, `QBO_CLIENT_ID`, `QBO_CLIENT_SECRET`, `QBO_ENVIRONMENT`,
+`NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`, `STRIPE_SECRET_KEY`, and a fresh
+`QBO_TOKEN_ENCRYPTION_KEY` (generated; also written to `.env.local`).
+
+### Brand/logo rollout
+User supplied transparent logo + 5 favicon sizes in `/public/`. Replaced
+text wordmarks on `/`, `/login`, `/signup` with `<Image>` logo; added
+32px favicon next to "Lotmonster" text in dashboard sidebar. Wired all
+favicon sizes + Apple touch icon via `metadata.icons` in `layout.tsx`.
+
+### Deployment lesson learned
+Commit `fb2fc82` auto-deployed via Vercel's git integration (CI-built →
+deploy `g7qckfojb`, works fine). A redundant manual `vercel --prod` from
+local (Windows) built a subtly-broken bundle (`bhihp4z9j`) that produced
+`AuthRetryableFetchError: ECONNRESET` on Vercel↔Supabase. Rolled back.
+**Lesson: deploy via `git push`. Never `vercel --prod` from this Windows
+box.** Vercel git integration is verified working end-to-end.
+
+### Build plan overhaul
+Bob wrote the SKU + finished-goods plan
+(`docs/plans/2026-04-16-skus-and-finished-goods.md`), revised it against
+user's 6 answers (packaging-as-inventory pulled from phase 3 to phase 1
+via `ingredients.kind` flag, among others), then produced the master
+build plan (`docs/plans/2026-04-16-build-plan-revised-from-part-9.md`)
+that supersedes v3 guide Parts 9–15. I then wrote the step-by-step
+prompt-driven execution guide at `docs/lotmonster-build-guide-v4.md`
+(~4,000 lines) which is authoritative from Part 9 onward. Both plans
+were aligned to v4 canonical naming after a consistency pass:
+- `ai_readonly` role (no `claude_readonly` alias)
+- qbo_sync_log retry columns `attempt_count` + `last_attempted_at` +
+  `error_message` (no `next_retry_at`/`last_error`; no exponential
+  backoff in MVP)
+- Migration numbers 007–012 canonical; phase-2 add-ons use 013+
+
+### Test checklist for 9A
+`docs/part-9a-test-checklist.md` written as the printable version of
+v4's Part 9A. 13 sections, ~90 min total. User is ticking through it now.
