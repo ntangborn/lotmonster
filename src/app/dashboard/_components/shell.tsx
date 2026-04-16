@@ -3,7 +3,8 @@
 import { useState } from 'react'
 import Image from 'next/image'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
+import { createClient } from '@/lib/supabase/client'
 import {
   LayoutDashboard,
   FlaskConical,
@@ -42,7 +43,14 @@ interface ShellProps {
 
 export function DashboardShell({ orgName, userEmail, children }: ShellProps) {
   const pathname = usePathname()
+  const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
+
+  async function handleSignOut() {
+    const supabase = createClient()
+    await supabase.auth.signOut()
+    router.push('/login')
+  }
 
   function isActive(href: string) {
     if (href === '/dashboard') return pathname === '/dashboard'
@@ -99,15 +107,13 @@ export function DashboardShell({ orgName, userEmail, children }: ShellProps) {
       {/* User / logout */}
       <div className="border-t border-white/10 p-4">
         <div className="mb-2 truncate px-1 text-xs text-white/30">{userEmail}</div>
-        <form action="/api/auth/logout" method="POST">
-          <button
-            type="submit"
-            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-white/50 transition-colors hover:bg-white/5 hover:text-white"
-          >
-            <LogOut size={14} />
-            Sign out
-          </button>
-        </form>
+        <button
+          onClick={handleSignOut}
+          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-white/50 transition-colors hover:bg-white/5 hover:text-white"
+        >
+          <LogOut size={14} />
+          Sign out
+        </button>
       </div>
     </div>
   )
