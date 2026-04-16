@@ -33,6 +33,7 @@ interface LowStockItem {
 }
 
 interface DashboardData {
+  totalIngredientRows: number
   totalActiveIngredients: number
   activeLots: number
   expiringThisWeek: number
@@ -133,6 +134,7 @@ async function loadDashboard(orgId: string): Promise<DashboardData> {
   ).size
 
   return {
+    totalIngredientRows: ingredients.length,
     totalActiveIngredients,
     activeLots: lotsRaw.length,
     expiringThisWeek: expiringThisWeekCount,
@@ -151,6 +153,9 @@ export default async function DashboardPage() {
   }
 
   const data = await loadDashboard(orgId)
+  if (data.totalIngredientRows === 0) {
+    redirect('/dashboard/onboarding')
+  }
 
   return (
     <div>

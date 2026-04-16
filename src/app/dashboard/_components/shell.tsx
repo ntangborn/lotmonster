@@ -20,10 +20,12 @@ import {
   LogOut,
   ChevronRight,
   GitBranch,
+  Upload,
 } from 'lucide-react'
 
 const NAV = [
   { label: 'Dashboard',       href: '/dashboard',                  icon: LayoutDashboard },
+  { label: 'Add Ingredients', href: '/dashboard/onboarding',       icon: Upload },
   { label: 'Ingredients',     href: '/dashboard/ingredients',      icon: FlaskConical },
   { label: 'Lots',            href: '/dashboard/lots',             icon: Boxes },
   { label: 'Recipes',         href: '/dashboard/recipes',          icon: BookOpen },

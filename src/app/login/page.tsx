@@ -52,7 +52,7 @@ export default function LoginPage() {
     setState('verifying')
     setErrorMsg('')
 
-    const { data, error } = await supabase.auth.verifyOtp({
+    const { error } = await supabase.auth.verifyOtp({
       email: email.trim(),
       token,
       type: 'email',
@@ -64,11 +64,7 @@ export default function LoginPage() {
       return
     }
 
-    const createdAt = data.user?.created_at
-      ? new Date(data.user.created_at).getTime()
-      : 0
-    const isNewUser = Date.now() - createdAt < 60_000
-    router.replace(isNewUser ? '/dashboard/onboarding' : '/dashboard')
+    router.replace('/dashboard')
   }
 
   async function handleGoogle() {
