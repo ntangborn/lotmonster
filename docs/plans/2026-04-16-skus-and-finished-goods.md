@@ -2,6 +2,7 @@
 
 **Date:** 2026-04-16
 **Revised:** 2026-04-16 — user answered the 6 open questions; packaging-as-inventory pulled into phase 1, production-run completion UI gains expiry override, phase-2 case-pricing spec sharpened. See "Resolved questions" for the full answer log.
+**Revised again 2026-04-16:** aligned QBO account mappings + migration numbering with v4 build guide (`docs/lotmonster-build-guide-v4.md`). QBO account refs are columns on `orgs` (not a `qbo_account_mappings` junction); phase-2 migrations renumbered to 013+ because v4 reserves 009–012 for AI functions, AI readonly role, `qbo_sync_log` retry columns, and Stripe.
 **Author:** Bob (build planner)
 **Status:** Draft (rev 2) — design locked pending [DANNY] / [RAY] review
 
@@ -285,7 +286,9 @@ concurrency becomes real.
    backfill is verified):
    - `ALTER sales_order_lines ALTER sku_id SET NOT NULL`.
    - `ALTER sales_order_lines ALTER recipe_id DROP NOT NULL`. Keep the
-     column for one more deploy as a safety net; drop it in migration 009.
+     column for one more deploy as a safety net; drop it in a phase-2
+     migration at 013+ (v4 reserves 009–012 for AI functions, AI
+     readonly, qbo_sync_log retry columns, and Stripe).
 
 **Why this ordering matters.** A hard cut (drop `recipe_id` in one migration)
 would break the existing SO list/detail pages the moment the migration runs,
@@ -403,13 +406,26 @@ Server-side check at completeRun time, refuse to complete on mismatch.
 
 #### Q9. QBO sync — per-SKU item mapping, with fallback to current default
 
+**How do the `orgs.qbo_*_account_id` columns extend for SKUs?** They don't
+need to — QBO account references already live as columns on the `orgs`
+table (migrations 004 + 005 added `orgs.qbo_cogs_account_id`,
+`orgs.qbo_inventory_account_id`, `orgs.qbo_ar_account_id`,
+`orgs.qbo_ap_account_id`, `orgs.qbo_default_item_id`,
+`orgs.qbo_income_account_id`). There is no `qbo_account_mappings`
+junction table; the mapping is org-scoped and single-valued per kind.
+SKU-level overrides land one layer below, on the new
+`skus.qbo_item_id` column (added in migration 007 as part of the new
+`skus` table).
+
 **Today.** `orgs.qbo_default_item_id` is used for every invoice line. The
 recipe name goes in the line description.
 
-**Phase 1 change:** Add `skus.qbo_item_id TEXT NULL`. Invoice sync uses
+**Phase 1 change:** Add `skus.qbo_item_id TEXT NULL` (in migration 007,
+on the `skus` table itself). Invoice sync uses
 `sku.qbo_item_id ?? org.qbo_default_item_id`. This keeps existing orgs
 working with zero config and lets orgs progressively map SKUs to QBO Items
-as they're created.
+as they're created. No junction table; the per-SKU override is just a
+column on `skus`.
 
 **Phase 2 change:** Settings page gains a "QBO Mapping" section per SKU
 with a QBO-Item-picker. Cases and units map independently (a case SKU
@@ -561,7 +577,7 @@ shipping 1 case of 12 still draws down 1 case-SKU lot (phase 2 pre-packed
 case model) or 12 unit-SKU lots (case-on-demand, out of scope). The toggle
 is presentation-only.
 
-**Schema — new columns on `sales_order_lines` (phase 2, migration 009):**
+**Schema — new columns on `sales_order_lines` (phase 2, migration 013+):**
 - `price_display_mode text NOT NULL DEFAULT 'case' CHECK IN ('case','unit')`
   — default is 'case' when `sku.kind='case'`, 'unit' when `sku.kind='unit'`.
 - `unit_price_override numeric(12,4) NULL` — if set, overrides the
@@ -680,10 +696,12 @@ ingredients.kind + sku_packaging + backfill).
 `lot_numbers_allocated`, case-price display toggle on invoices, per-SKU QBO
 Item mapping.
 
-- Migration 009: `case_pack_events`, `sku.parent_sku_id`, `units_per_parent`,
-  `sales_order_line_lots` junction, `sales_order_lines.price_display_mode` +
-  `unit_price_override`, drop `sales_order_lines.recipe_id` and
-  `sales_order_lines.lot_numbers_allocated`.
+- Migration 013+ (phase 2): `case_pack_events`, `sku.parent_sku_id`,
+  `units_per_parent`, `sales_order_line_lots` junction,
+  `sales_order_lines.price_display_mode` + `unit_price_override`, drop
+  `sales_order_lines.recipe_id` and `sales_order_lines.lot_numbers_allocated`.
+  (V4 reserves 009 = AI functions, 010 = AI readonly role,
+  011 = `qbo_sync_log` retry columns, 012 = Stripe schema.)
 - `src/lib/packing/actions.ts` — `packCases(parentSkuId, qty, orgId)` with
   FEFO against the child SKU's lots. Packaging consumption at pack time
   (outer carton + case label, declared on the case SKU's `sku_packaging`).
@@ -835,8 +853,8 @@ component twice on one SKU.
 | Column | Type | Notes |
 |---|---|---|
 | sku_id | uuid NULL → NOT NULL (phase 2) FK→skus | NEW in 007 as NULL-able, cut to NOT NULL in 008 after backfill |
-| recipe_id | (unchanged) | deprecated, dropped in 009 |
-| lot_numbers_allocated | text[] | deprecated, replaced by `sales_order_line_lots` junction in 009 |
+| recipe_id | (unchanged) | deprecated, dropped in a phase-2 migration (013+) |
+| lot_numbers_allocated | text[] | deprecated, replaced by `sales_order_line_lots` junction in a phase-2 migration (013+) |
 
 ### Migration numbering
 
@@ -850,9 +868,15 @@ component twice on one SKU.
     `sales_order_lines.sku_id` from `recipe_id`
 - **008** (post-deploy, after phase 1 app code ships) — `sku_id SET NOT NULL`,
   `recipe_id DROP NOT NULL`.
-- **009** (phase 2) — `sales_order_line_lots`, drop old columns,
-  `case_pack_events`, `skus.parent_sku_id`, `sales_order_lines.price_display_mode`
-  + `unit_price_override`, etc.
+- **009** (v4 canonical) — AI functions (11 RPCs for tool_use). Part 10
+  work; see build plan.
+- **010** (v4 canonical) — `ai_readonly` pg role for AI tool_use. Part 10 work.
+- **011** (v4 canonical) — `qbo_sync_log` retry columns (`attempt_count`,
+  `last_attempted_at`, `error_message`). Part 11 work.
+- **012** (v4 canonical) — Stripe schema if needed. Part 12 work.
+- **013+** (phase 2 of the SKU plan) — `sales_order_line_lots`, drop old
+  columns, `case_pack_events`, `skus.parent_sku_id`,
+  `sales_order_lines.price_display_mode` + `unit_price_override`, etc.
 
 [DANNY] Migration 007 does real work (creates 3 tables, extends 3 tables,
 runs backfill). Run in a transaction; include row-count asserts in the DO
@@ -901,7 +925,7 @@ consequence has been propagated into the relevant decision / phase section.
 6. **Case pricing on invoices — display toggle + override, phase 2.**
    Per-line mode (`'case' | 'unit'`) plus optional `unit_price_override`.
    Underlying inventory math unchanged; the toggle is presentation-only.
-   See new Q12 decision block. Propagated to: Phase 2 scope, migration 009
+   See new Q12 decision block. Propagated to: Phase 2 scope, migration 013+
    schema adds. Phase 1 is unaffected because phase 1 only sells unit SKUs.
 
 ---
@@ -930,7 +954,7 @@ consequence has been propagated into the relevant decision / phase section.
   cleanly. If 008 ever needs a rollback after 007 shipped, we're in a
   split-brain state (some SO lines have `sku_id`, others don't). Mitigation:
   keep `recipe_id` in the table through at least one more deploy before
-  dropping it in 009.
+  dropping it in a phase-2 migration (013+).
 - **No new environment variables.** The existing QBO envs cover the
   per-SKU Item mapping work (phase 2+).
 - **Admin-client call sites grow.** `completeRun` now writes to **5 tables**

@@ -1,8 +1,9 @@
 # Lotmonster Build Plan — Revised from Part 9 through Contest Submission
 
 **Date:** 2026-04-16
+**Revised 2026-04-16:** aligned QBO account mappings + migration numbering with v4 build guide (`docs/lotmonster-build-guide-v4.md`). QBO account refs live as columns on `orgs` (no `qbo_account_mappings` junction). Migration numbering tightened to v4 canonical: 007 SKUs, 008 SO.sku_id cutover, 009 AI functions, 010 AI readonly role, 011 `qbo_sync_log` retry columns, 012 Stripe schema. Phase-2 SKU-plan migrations push to 013+.
 **Author:** Bob (build planner)
-**Status:** Authoritative — supersedes `docs/lotmonster-build-guide-v3.md` Parts 9–15
+**Status:** Authoritative — supersedes `docs/lotmonster-build-guide-v3.md` Parts 9–15; aligned to v4 build guide
 
 ---
 
@@ -378,20 +379,24 @@ four QBO Account IDs from the Sandbox company's Chart of Accounts:
   the same query, print the top 30 accounts, and pick IDs by hand.
   **[CLAUDE CODE]** can scaffold this script in 10 min.
 
-**Seed via SQL:**
-```sql
-INSERT INTO qbo_account_mappings (org_id, kind, qbo_account_id)
-VALUES
-  ('YOUR_ORG_ID', 'cogs', '<id>'),
-  ('YOUR_ORG_ID', 'inventory', '<id>'),
-  ('YOUR_ORG_ID', 'ar', '<id>'),
-  ('YOUR_ORG_ID', 'ap', '<id>'),
-  ('YOUR_ORG_ID', 'income', '<id>'),
-  ('YOUR_ORG_ID', 'default_item', '<item_id>');
-```
-(Confirm the exact `kind` enum values in migration 005 before pasting.)
+**Seed via SQL.** QBO account refs live as columns on `orgs` (migrations 004
++ 005) — there is no `qbo_account_mappings` junction table. Update the row
+in place:
 
-**Pass when:** [ ] Six rows exist in `qbo_account_mappings` for the test org.
+```sql
+UPDATE orgs
+SET qbo_cogs_account_id      = '<id>',
+    qbo_inventory_account_id = '<id>',
+    qbo_ar_account_id        = '<id>',
+    qbo_ap_account_id        = '<id>',
+    qbo_income_account_id    = '<id>',
+    qbo_default_item_id      = '<item_id>'
+WHERE id = '$ORG_ID';
+```
+(Confirm the exact column names in migrations 004 + 005 before pasting.)
+
+**Pass when:** [ ] All six `qbo_*` columns on the test org row in `orgs` are
+populated with valid QBO IDs from the connected sandbox realm.
 
 ### 9B.3 — Manual trigger of each sync route
 
@@ -600,9 +605,9 @@ get_finished_goods_status(p_org_id uuid, p_sku_id uuid OPTIONAL) →
 This is the tool that makes demo questions like "what can I sell today?" work with
 a single call.
 
-### 10.3 — Named Postgres functions (migration 010)
+### 10.3 — Named Postgres functions (migration 009)
 
-Store the SQL at `supabase/migrations/010_ai_functions.sql`. All functions:
+Store the SQL at `supabase/migrations/009_ai_functions.sql`. All functions:
 - `SECURITY DEFINER`
 - Scoped to `p_org_id`; server-side route injects `org_id` from the authenticated
   JWT / session and **ignores whatever Claude passes** (security note from the
@@ -611,8 +616,8 @@ Store the SQL at `supabase/migrations/010_ai_functions.sql`. All functions:
   return `TABLE (...)` when the shape is a list.
 
 Carry the original guide's Part 9.3 "SELECT-only role" concept forward:
-- Migration 011: `ai_readonly` NOLOGIN role with SELECT on all public tables + EXECUTE
-  on only the 11 whitelisted AI functions.
+- Migration 010: `ai_readonly` NOLOGIN role with SELECT
+  on all public tables + EXECUTE on only the 11 whitelisted AI functions.
 - Wrapper: `execute_ai_query(function_name text, params jsonb)` sets role, validates
   against the whitelist, returns the result. This is defense-in-depth — if a future
   bug in the route layer ever forwards Claude's raw SQL-ish output, the role boundary
@@ -652,8 +657,8 @@ Route exists as a sidebar link today; the page 404s. Build it.
 
 | # | Milestone | Effort (days) |
 |---|---|---|
-| 10.1 | Migration 010: 11 SECURITY-DEFINER functions | 1.25 |
-| 10.2 | Migration 011: `ai_readonly` role + `execute_ai_query` wrapper | 0.5 |
+| 10.1 | Migration 009: 11 SECURITY-DEFINER functions | 1.25 |
+| 10.2 | Migration 010: `ai_readonly` role + `execute_ai_query` wrapper | 0.5 |
 | 10.3 | `/api/ai/query` route with two-turn tool_use | 1.0 |
 | 10.4 | `/dashboard/ai` chat UI | 1.0 |
 | 10.5 | End-to-end test of the 5 suggested questions against real data | 0.75 |
@@ -661,7 +666,7 @@ Route exists as a sidebar link today; the page 404s. Build it.
 
 ### Cross-team tags
 
-- [DANNY] Migration 010+011 run in order; 011 depends on 010. Role creation needs
+- [DANNY] Migration 009+010 run in order; 010 depends on 009. Role creation needs
   `CREATEROLE` — confirm Supabase Postgres grants it to the migration runner.
 - [RAY] Confirm `execute_ai_query` cannot be called directly by an authenticated
   user — only from the route. If the grant is wrong, a client could bypass the
@@ -710,23 +715,28 @@ nothing consumes `qbo_sync_log` rows with `status='pending'`, so every ship / re
      the same CRON_SECRET bearer (internal call).
    - On 200: mark 'synced', store returned doc ID (routes already persist it
      on the entity row, so dispatcher just needs to confirm).
-   - On error: increment attempt_count, store error_message, set
-     last_attempted_at, status = 'failed'.
+   - On error: increment attempt_count, store error_message, stamp
+     last_attempted_at, status = 'failed'. No time-based backoff —
+     dispatcher re-picks 'failed' rows on the next tick until
+     attempt_count reaches MAX_ATTEMPTS (5).
 3. Log summary: { attempted, succeeded, failed, skipped }.
 ```
 
-### 11.3 — Schema addition — migration 012
+### 11.3 — Schema addition — migration 011
 
-[DANNY] `qbo_sync_log` likely doesn't yet have `attempt_count`, `last_attempted_at`,
-`error_message`. **Check migration 001 before writing 012.** If the columns exist,
-skip the migration; if not, add:
+[DANNY] `qbo_sync_log` likely doesn't yet have `attempt_count`,
+`last_attempted_at`, `error_message`. **Check migration 001 before writing
+011.** If the columns exist, skip the migration; if not, add:
 
 ```sql
 ALTER TABLE qbo_sync_log
-  ADD COLUMN IF NOT EXISTS attempt_count int NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS attempt_count     int NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS last_attempted_at timestamptz,
-  ADD COLUMN IF NOT EXISTS error_message text;
+  ADD COLUMN IF NOT EXISTS error_message     text;
 ```
+
+(V4 canonical column names. Simple retry-up-to-5 design — no exponential
+backoff in MVP; the dispatcher just filters `attempt_count < 5`.)
 
 ### 11.4 — Vercel cron schedule
 
@@ -762,7 +772,7 @@ future "retry sync" button on the settings page.
 
 | # | Milestone | Effort (days) |
 |---|---|---|
-| 11.1 | Migration 012 (if needed) | 0.25 |
+| 11.1 | Migration 011 (if needed) | 0.25 |
 | 11.2 | `/api/cron/qbo-sync` route | 0.75 |
 | 11.3 | `vercel.json` crons block + Pro-plan decision | 0.1 |
 | 11.4 | End-to-end test: ship SO → wait 15 min → confirm invoice in sandbox | 0.4 |
@@ -806,7 +816,7 @@ Use these sections from `docs/lotmonster-build-guide-v3.md` as the base:
 ### 12.2 — Deltas from the original plan
 
 1. **Schema.** `orgs.stripe_customer_id` exists. **Confirm these columns also exist
-   (if not, migration 013 adds them):**
+   (if not, migration 012 adds them — v4 canonical Stripe-schema slot):**
    - `stripe_subscription_id text`
    - `plan text` (values: 'starter' | 'growth' | 'scale' | 'canceled')
    - `subscription_status text` ('trialing' | 'active' | 'past_due' | 'canceled')
@@ -823,7 +833,10 @@ Use these sections from `docs/lotmonster-build-guide-v3.md` as the base:
 
 4. **Plan gating surface.**
    - AI query count/day: needs a counter. Simplest: a `ai_usage` table with
-     `(org_id, date)` PK and `count int`. Migration 014 if needed.
+     `(org_id, date)` PK and `count int`. Next available migration slot
+     (013+) if needed — post-Stripe, beyond v4's explicit 007–012 canonical
+     list. Note the phase-2 SKU-plan migrations also land in the 013+ range;
+     exact numbering is first-come, first-served at build time.
    - Ingredient/Lot/Recipe counts: real-time SELECT COUNT(*) in the create handler
      — no new table.
    - QBO sync: gate the sync routes + dispatcher on `orgs.plan != 'starter'`.
@@ -833,7 +846,7 @@ Use these sections from `docs/lotmonster-build-guide-v3.md` as the base:
 | # | Milestone | Effort (days) |
 |---|---|---|
 | 12.1 | Stripe products + prices (via Perplexity-guided dashboard setup) | 0.25 |
-| 12.2 | Schema catch-up (migration 013 if needed) + plan gating lib | 0.5 |
+| 12.2 | Schema catch-up (migration 012 if needed) + plan gating lib | 0.5 |
 | 12.3 | `/api/stripe/checkout` route | 0.25 |
 | 12.4 | `/api/stripe/webhook` route | 0.5 |
 | 12.5 | `/api/stripe/portal` route | 0.25 |
@@ -1008,7 +1021,7 @@ shell, route, fixes.
 ### Intent
 
 One-day final sweep before contest submission. The original guide's Part 13 is close
-but predates migrations 007–013 and the SKU model.
+but predates migrations 007–012 and the SKU model.
 
 ### 14.1 — Security Audit
 
@@ -1030,7 +1043,7 @@ Carry the original guide's 10 checks forward. Add these post-SKU-plan items:
 Plus all 10 original checks:
 - CRON_SECRET bearer on cron routes
 - RLS enabled on ALL tables (now 13 original + `skus` + `production_run_outputs` +
-  `sku_packaging` + others from 010/011/013)
+  `sku_packaging` + others from 009/010/012)
 - Auth redirect on /dashboard
 - No hardcoded API keys in source
 - Stripe raw-body webhook
@@ -1156,9 +1169,12 @@ the user can prioritize post-contest.
 - **Case-price display toggle on invoices (phase 2).** `price_display_mode` +
   `unit_price_override` on SO lines. See SKU plan Q12.
 - **`sales_order_line_lots` junction (phase 2).** Replaces free-text
-  `lot_numbers_allocated TEXT[]`. Migration 015+.
-- **Migration 008 finalize.** Drop `sales_order_lines.recipe_id` after all app code
-  reads from `sku_id`. Probably safe 2 deploys after Part 9 ships.
+  `lot_numbers_allocated TEXT[]`. Migration 013+.
+- **Drop `sales_order_lines.recipe_id` (phase 2, migration 013+).** After all
+  app code reads from `sku_id`. Probably safe 2 deploys after Part 9 ships.
+  (Migration 008 does the cutover — sets `sku_id NOT NULL` and relaxes
+  `recipe_id` — but keeps the column as a safety net; the actual DROP
+  COLUMN lands in the first phase-2 migration.)
 - **Postgres RPC for atomicity.** `startRun`, `completeRun`, `shipSalesOrder`,
   `receivePO`, `packCases` all currently sequential-writes with best-effort rollback.
   Move to server-side RPC functions to eliminate overdraft under concurrency.
@@ -1210,11 +1226,15 @@ the user can prioritize post-contest.
 
 Infrastructure + ops concerns across the full plan:
 
-- **New migrations this plan introduces:** 007 (SKU plan, wide), 008 (SKU cutover,
-  post-Part-9), 010 (AI functions), 011 (AI readonly role), 012 (qbo_sync_log
-  attempt_count if not already there), 013 (Stripe schema catch-up if needed), 014
-  (AI usage counter if needed). That's 5–7 migrations across ~3 weeks. All
-  additive except 008. All should run in transactions.
+- **New migrations this plan introduces (v4 canonical numbering):** 007 (SKU
+  plan, wide), 008 (SKU cutover, post-Part-9), 009 (AI functions), 010 (AI
+  readonly role), 011 (qbo_sync_log retry columns — `attempt_count`,
+  `last_attempted_at`, `error_message` — if not already there), 012 (Stripe
+  schema catch-up if needed). Beyond v4's explicit list, the 013+ slot absorbs
+  whichever post-012 add lands first: either the AI usage counter (this plan,
+  Part 12) or the phase-2 SKU-plan migrations (`sales_order_line_lots`,
+  `case_pack_events`, drop `recipe_id`). That's 5–7 migrations across
+  ~3 weeks. All additive except 008. All should run in transactions.
 - **Vercel cron — Hobby vs Pro.** Every-15-min cadence for `/api/cron/qbo-sync`
   requires Pro. Hobby allows 1 invocation/day which is demo-unusable. Flag the
   plan upgrade decision early in the Part 11 window.
@@ -1227,9 +1247,10 @@ Infrastructure + ops concerns across the full plan:
   expected runtime < 1s.
 - **Rotation reminder.** CLAUDE.md flags the service-role key + Supabase access
   token as leaked. Rotate before contest submission.
-- **Supabase role creation.** Migration 011 creates `ai_readonly` via `CREATE ROLE ... NOLOGIN`.
-  Confirm the Supabase migration runner has CREATEROLE — if not, document a one-time
-  Management-API or SQL-editor step.
+- **Supabase role creation.** Migration 010 creates `ai_readonly` via
+  `CREATE ROLE ... NOLOGIN`. Confirm the Supabase migration
+  runner has CREATEROLE — if not, document a one-time Management-API or
+  SQL-editor step.
 - **Proxy.ts public routes.** `/api/stripe/webhook` must be explicitly allowed (no
   session cookie). Already have `/api/cron/*` pattern; add webhook in Part 12.
 - **`completeRun` atomic complexity.** Post-Part-9 it writes to 5 tables in a
