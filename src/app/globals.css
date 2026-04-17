@@ -24,3 +24,15 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Native <select> dropdown items — force readable colors on the dark UI
+   (browsers default <option> to OS colors, which can render white-on-white). */
+option {
+  background-color: #0D1B2A;
+  color: #ffffff;
+}
+option:checked,
+option:hover {
+  background-color: #14b8a6;
+  color: #ffffff;
+}
