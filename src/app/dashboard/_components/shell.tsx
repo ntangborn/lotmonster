@@ -21,6 +21,7 @@ import {
   ChevronRight,
   GitBranch,
   Upload,
+  Tag,
 } from 'lucide-react'
 
 const NAV = [
@@ -29,6 +30,7 @@ const NAV = [
   { label: 'Ingredients',     href: '/dashboard/ingredients',      icon: FlaskConical },
   { label: 'Lots',            href: '/dashboard/lots',             icon: Boxes },
   { label: 'Recipes',         href: '/dashboard/recipes',          icon: BookOpen },
+  { label: 'SKUs',            href: '/dashboard/skus',             icon: Tag },
   { label: 'Production Runs', href: '/dashboard/production-runs',  icon: Factory },
   { label: 'Purchase Orders', href: '/dashboard/purchase-orders',  icon: ClipboardList },
   { label: 'Sales Orders',    href: '/dashboard/sales-orders',     icon: ShoppingBag },

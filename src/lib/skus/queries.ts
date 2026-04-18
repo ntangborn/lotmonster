@@ -101,6 +101,15 @@ export interface SkuDetail {
       | 'production_run_id'
     >
   >
+  productionHistory: Array<{
+    production_run_id: string
+    run_number: string | null
+    run_status: string | null
+    completed_at: string | null
+    quantity: number
+    allocated_cogs_total: number
+    unit_cogs: number
+  }>
 }
 
 export async function getSkuDetail(
@@ -117,7 +126,7 @@ export async function getSkuDetail(
     .maybeSingle()
   if (!sku) return null
 
-  const [recipeRes, bomRes, lotsRes] = await Promise.all([
+  const [recipeRes, bomRes, lotsRes, outputsRes] = await Promise.all([
     sku.recipe_id
       ? admin
           .from('recipes')
@@ -142,6 +151,14 @@ export async function getSkuDetail(
       .eq('sku_id', id)
       .order('expiry_date', { ascending: true, nullsFirst: false })
       .order('received_date', { ascending: true }),
+    admin
+      .from('production_run_outputs')
+      .select(
+        'production_run_id, quantity, allocated_cogs_total, unit_cogs, production_runs(run_number, status, completed_at)'
+      )
+      .eq('org_id', orgId)
+      .eq('sku_id', id)
+      .order('created_at', { ascending: false }),
   ])
 
   const recipe = recipeRes.data
@@ -170,12 +187,59 @@ export async function getSkuDetail(
     0
   )
 
+  const productionHistory = (outputsRes.data ?? []).map((row) => {
+    const run = (
+      row as unknown as {
+        production_runs: {
+          run_number: string | null
+          status: string | null
+          completed_at: string | null
+        } | null
+      }
+    ).production_runs
+    return {
+      production_run_id: row.production_run_id,
+      run_number: run?.run_number ?? null,
+      run_status: run?.status ?? null,
+      completed_at: run?.completed_at ?? null,
+      quantity: Number(row.quantity) || 0,
+      allocated_cogs_total: Number(row.allocated_cogs_total) || 0,
+      unit_cogs: Number(row.unit_cogs) || 0,
+    }
+  })
+
   return {
     sku: { ...sku, on_hand: onHand, lot_count: available.length },
     recipe,
     packaging,
     finishedLots,
+    productionHistory,
   }
+}
+
+export async function listPackagingIngredients(
+  orgId: string
+): Promise<Array<{ id: string; name: string; unit: string }>> {
+  const admin = createAdminClient()
+  const { data } = await admin
+    .from('ingredients')
+    .select('id, name, unit')
+    .eq('org_id', orgId)
+    .eq('kind', 'packaging')
+    .order('name', { ascending: true })
+  return data ?? []
+}
+
+export async function listRecipesForSelect(
+  orgId: string
+): Promise<Array<{ id: string; name: string }>> {
+  const admin = createAdminClient()
+  const { data } = await admin
+    .from('recipes')
+    .select('id, name')
+    .eq('org_id', orgId)
+    .order('name', { ascending: true })
+  return data ?? []
 }
 
 /**
