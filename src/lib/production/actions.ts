@@ -3,28 +3,22 @@ import {
   allocateLots,
   previewAllocation,
   InsufficientStockError,
-  type LotAllocation,
 } from '@/lib/fefo'
 import { buildLotPrefix } from '@/lib/skus/schema'
+import {
+  planCompleteRun,
+  RunStateError,
+  type CompleteRunOutput,
+  type ResolvedBom,
+  type ResolvedOutput,
+} from './complete-run-math'
 import type { Database } from '@/types/database'
 
 type LotRow = Database['public']['Tables']['lots']['Row']
-type SkuRow = Database['public']['Tables']['skus']['Row']
 
-export class RunStateError extends Error {
-  constructor(msg: string) {
-    super(msg)
-    this.name = 'RunStateError'
-  }
-}
-
-export interface CompleteRunOutput {
-  skuId: string
-  quantity: number
-  expiryDate?: string | null
-  liquidPctOverride?: number | null
-  overrideNote?: string | null
-}
+// Re-export for existing consumers (API routes that do `import { RunStateError } from '@/lib/production/actions'`).
+export { RunStateError }
+export type { CompleteRunOutput }
 
 /**
  * Allocate ingredients via FEFO and decrement lot quantities for an
@@ -161,37 +155,6 @@ async function rollbackConsumption(
   }
 }
 
-interface PreviewedBom {
-  ingredientId: string
-  ingredientName: string
-  allocations: LotAllocation[]
-  packagingCost: number
-}
-
-interface EnrichedOutput {
-  index: number
-  input: CompleteRunOutput
-  sku: Pick<
-    SkuRow,
-    | 'id'
-    | 'name'
-    | 'kind'
-    | 'fill_quantity'
-    | 'fill_unit'
-    | 'shelf_life_days'
-    | 'lot_prefix'
-  >
-  pct: number
-  defaultPct: number
-  liquidCogs: number
-  packagingCogs: number
-  allocatedTotal: number
-  unitCogs: number
-  boms: PreviewedBom[]
-  expiryDate: string | null
-  overrideNote: string | null
-}
-
 interface WriteTracker {
   packagingConsumed: Array<{ lotId: string; quantity: number }>
   packagingRunLotIds: string[]
@@ -279,7 +242,7 @@ export async function completeRun(
     throw new RunStateError('At least one output SKU is required')
   }
 
-  // ── 1. Validate run + SKUs ─────────────────────────────────────────
+  // ── 1. Validate run exists + is in_progress ────────────────────────
   const { data: run } = await admin
     .from('production_runs')
     .select('id, status, expected_yield, recipe_id, yield_unit')
@@ -291,19 +254,7 @@ export async function completeRun(
     throw new RunStateError(`Cannot complete a run in state "${run.status}"`)
   }
 
-  const seenSkuIds = new Set<string>()
-  for (const o of outputs) {
-    if (seenSkuIds.has(o.skuId)) {
-      throw new RunStateError(
-        `Output SKU ${o.skuId} appears more than once — one row per SKU per run`
-      )
-    }
-    seenSkuIds.add(o.skuId)
-    if (!(Number(o.quantity) > 0)) {
-      throw new RunStateError('Every output quantity must be > 0')
-    }
-  }
-
+  // ── 2. Fetch SKUs (verify they belong to this org) ─────────────────
   const skuIds = outputs.map((o) => o.skuId)
   const { data: skuRows } = await admin
     .from('skus')
@@ -313,29 +264,16 @@ export async function completeRun(
     .eq('org_id', orgId)
     .in('id', skuIds)
   const skuById = new Map((skuRows ?? []).map((s) => [s.id, s]))
-
   for (const o of outputs) {
-    const sku = skuById.get(o.skuId)
-    if (!sku) {
+    if (!skuById.has(o.skuId)) {
       throw new RunStateError(
         `SKU ${o.skuId} not found in this organization`
       )
     }
-    if (sku.kind !== 'unit') {
-      throw new RunStateError(
-        `SKU "${sku.name}" has kind "${sku.kind}" — phase 1 only supports unit SKUs as run outputs`
-      )
-    }
-    if (sku.fill_quantity == null || Number(sku.fill_quantity) <= 0) {
-      throw new RunStateError(
-        `SKU "${sku.name}" has no fill_quantity declared — required for liquid-COGS allocation`
-      )
-    }
   }
 
-  // ── 2. Read liquid_total from raw consumption already done ────────
-  // production_run_lots currently contains raw consumption only (packaging
-  // is consumed here, below). Sum before inserting any new rows.
+  // ── 3. Read liquid_total from raw production_run_lots already written
+  // by startRun (this function adds packaging rows AFTER this read). ──
   const { data: rawConsumption } = await admin
     .from('production_run_lots')
     .select('line_cost')
@@ -346,47 +284,9 @@ export async function completeRun(
     0
   )
 
-  // ── 3. Liquid-share allocation (volume default, operator override) ──
-  const weights = outputs.map((o) => {
-    const sku = skuById.get(o.skuId)!
-    return Number(sku.fill_quantity) * Number(o.quantity)
-  })
-  const weightSum = weights.reduce((a, b) => a + b, 0)
-  if (weightSum <= 0) {
-    throw new RunStateError(
-      'Total volume weight is zero — at least one output must have fill_quantity * quantity > 0'
-    )
-  }
-  const defaultPcts = weights.map((w) => w / weightSum)
-
-  const overridesProvided = outputs.map(
-    (o) => o.liquidPctOverride != null
-  )
-  const anyOverride = overridesProvided.some(Boolean)
-  const allOverride = overridesProvided.every(Boolean)
-  if (anyOverride && !allOverride) {
-    throw new RunStateError(
-      'liquidPctOverride must be provided for every output or none'
-    )
-  }
-
-  let effectivePcts: number[]
-  if (allOverride) {
-    effectivePcts = outputs.map((o) => Number(o.liquidPctOverride))
-    const sum = effectivePcts.reduce((a, b) => a + b, 0)
-    if (Math.abs(sum - 1) > 1e-6) {
-      throw new RunStateError(
-        `liquidPctOverride values must sum to 1.0 (got ${sum.toFixed(6)})`
-      )
-    }
-  } else {
-    effectivePcts = defaultPcts
-  }
-
-  // ── 4. Preview packaging FEFO for every output + BOM entry ────────
-  const enriched: EnrichedOutput[] = []
-  for (let i = 0; i < outputs.length; i++) {
-    const o = outputs[i]
+  // ── 4. Resolve each output's packaging BOM via previewAllocation ───
+  const resolved: ResolvedOutput[] = []
+  for (const o of outputs) {
     const sku = skuById.get(o.skuId)!
 
     const { data: bomRows } = await admin
@@ -395,8 +295,7 @@ export async function completeRun(
       .eq('org_id', orgId)
       .eq('sku_id', sku.id)
 
-    const boms: PreviewedBom[] = []
-    let packagingCogs = 0
+    const boms: ResolvedBom[] = []
     for (const bom of bomRows ?? []) {
       const ing = (
         bom as unknown as {
@@ -420,76 +319,24 @@ export async function completeRun(
         need,
         orgId
       )
-      if (!preview.ok) {
-        const err = new InsufficientStockError(
-          preview.needed,
-          preview.available
-        )
-        err.message = `Insufficient stock for packaging: SKU "${sku.name}" needs ${preview.needed} ${ing.name}, only ${preview.available} available`
-        throw err
-      }
-
-      const lineCost = preview.allocations.reduce(
-        (s, a) => s + a.quantityUsed * a.unitCost,
-        0
-      )
-      packagingCogs += lineCost
       boms.push({
         ingredientId: bom.ingredient_id,
         ingredientName: ing.name,
-        allocations: preview.allocations,
-        packagingCost: lineCost,
+        quantityPerUnit: Number(bom.quantity),
+        allocation: preview.ok
+          ? { ok: true, allocations: preview.allocations }
+          : { ok: false, needed: preview.needed, available: preview.available },
       })
     }
 
-    const liquidCogs = liquidTotal * effectivePcts[i]
-    const allocatedTotal = liquidCogs + packagingCogs
-    const unitCogs = allocatedTotal / Number(o.quantity)
-
-    const expiryDate =
-      o.expiryDate ??
-      (sku.shelf_life_days != null
-        ? addDaysISO(today(), Number(sku.shelf_life_days))
-        : null)
-
-    let overrideNote: string | null = null
-    if (allOverride) {
-      overrideNote =
-        o.overrideNote?.trim() ||
-        `default pct ${defaultPcts[i].toFixed(6)} → override ${effectivePcts[i].toFixed(6)}`
-    } else if (o.overrideNote?.trim()) {
-      overrideNote = o.overrideNote.trim()
-    }
-
-    enriched.push({
-      index: i,
-      input: o,
-      sku,
-      pct: effectivePcts[i],
-      defaultPct: defaultPcts[i],
-      liquidCogs,
-      packagingCogs,
-      allocatedTotal,
-      unitCogs,
-      boms,
-      expiryDate,
-      overrideNote,
-    })
+    resolved.push({ input: o, sku, boms })
   }
 
-  // ── 5/6. Compute run total + invariant check ──────────────────────
-  const packagingTotal = enriched.reduce((s, e) => s + e.packagingCogs, 0)
-  const totalCogs = liquidTotal + packagingTotal
-  const allocatedSum = enriched.reduce((s, e) => s + e.allocatedTotal, 0)
-  if (Math.abs(allocatedSum - totalCogs) > 0.01) {
-    throw new RunStateError(
-      `Cost invariant failed: sum(allocated_cogs_total) = ${allocatedSum.toFixed(
-        4
-      )} but run total_cogs = ${totalCogs.toFixed(4)} (delta > $0.01)`
-    )
-  }
+  // ── 5. Pure cost math + invariant check ────────────────────────────
+  const plan = planCompleteRun({ liquidTotal, resolved })
+  const { planned, totalCogs } = plan
 
-  // ── 7. Commit phase — all tracked for rollback ────────────────────
+  // ── 6. Commit phase — all tracked for rollback ─────────────────────
   const tracker: WriteTracker = {
     packagingConsumed: [],
     packagingRunLotIds: [],
@@ -499,7 +346,7 @@ export async function completeRun(
   const datePart = todayStamp(today())
 
   try {
-    for (const e of enriched) {
+    for (const e of planned) {
       // 7a. Consume packaging per BOM entry.
       for (const bom of e.boms) {
         for (const a of bom.allocations) {
@@ -556,6 +403,12 @@ export async function completeRun(
         e.sku.lot_prefix ?? buildLotPrefix(e.sku.name) ?? 'LOT'
       const lotNumber = await nextLotNumber(admin, orgId, prefix, datePart)
 
+      const expiryDate =
+        e.input.expiryDate ??
+        (e.sku.shelf_life_days != null
+          ? addDaysISO(today(), Number(e.sku.shelf_life_days))
+          : null)
+
       const { data: finishedLot, error: lotErr } = await admin
         .from('lots')
         .insert({
@@ -569,7 +422,7 @@ export async function completeRun(
           unit: 'each',
           unit_cost: e.unitCogs,
           received_date: new Date().toISOString().slice(0, 10),
-          expiry_date: e.expiryDate,
+          expiry_date: expiryDate,
           status: 'available',
         })
         .select('id')
