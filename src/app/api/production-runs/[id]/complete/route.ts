@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { resolveOrgId } from '@/lib/ingredients/queries'
 import { completeRun, RunStateError } from '@/lib/production/actions'
+import { InsufficientStockError } from '@/lib/fefo'
 import { productionCompleteSchema } from '@/lib/production/schema'
 
 export async function POST(
@@ -36,12 +37,15 @@ export async function POST(
     await completeRun(
       orgId,
       id,
-      parsed.data.actual_yield,
+      parsed.data.outputs,
       parsed.data.notes ?? null
     )
     return NextResponse.json({ ok: true })
   } catch (e) {
     if (e instanceof RunStateError) {
+      return NextResponse.json({ error: e.message }, { status: 409 })
+    }
+    if (e instanceof InsufficientStockError) {
       return NextResponse.json({ error: e.message }, { status: 409 })
     }
     return NextResponse.json(

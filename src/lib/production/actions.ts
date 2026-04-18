@@ -1,14 +1,29 @@
 import { createAdminClient } from '@/lib/supabase/admin'
-import { allocateLots, InsufficientStockError } from '@/lib/fefo'
+import {
+  allocateLots,
+  previewAllocation,
+  InsufficientStockError,
+  type LotAllocation,
+} from '@/lib/fefo'
+import { buildLotPrefix } from '@/lib/skus/schema'
 import type { Database } from '@/types/database'
 
 type LotRow = Database['public']['Tables']['lots']['Row']
+type SkuRow = Database['public']['Tables']['skus']['Row']
 
 export class RunStateError extends Error {
   constructor(msg: string) {
     super(msg)
     this.name = 'RunStateError'
   }
+}
+
+export interface CompleteRunOutput {
+  skuId: string
+  quantity: number
+  expiryDate?: string | null
+  liquidPctOverride?: number | null
+  overrideNote?: string | null
 }
 
 /**
@@ -146,67 +161,528 @@ async function rollbackConsumption(
   }
 }
 
+interface PreviewedBom {
+  ingredientId: string
+  ingredientName: string
+  allocations: LotAllocation[]
+  packagingCost: number
+}
+
+interface EnrichedOutput {
+  index: number
+  input: CompleteRunOutput
+  sku: Pick<
+    SkuRow,
+    | 'id'
+    | 'name'
+    | 'kind'
+    | 'fill_quantity'
+    | 'fill_unit'
+    | 'shelf_life_days'
+    | 'lot_prefix'
+  >
+  pct: number
+  defaultPct: number
+  liquidCogs: number
+  packagingCogs: number
+  allocatedTotal: number
+  unitCogs: number
+  boms: PreviewedBom[]
+  expiryDate: string | null
+  overrideNote: string | null
+}
+
+interface WriteTracker {
+  packagingConsumed: Array<{ lotId: string; quantity: number }>
+  packagingRunLotIds: string[]
+  finishedLotIds: string[]
+  outputIds: string[]
+}
+
+function today(): Date {
+  return new Date()
+}
+
+function todayStamp(d: Date): string {
+  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(
+    d.getDate()
+  ).padStart(2, '0')}`
+}
+
+function addDaysISO(d: Date, days: number): string {
+  const next = new Date(d.getTime())
+  next.setDate(next.getDate() + days)
+  return next.toISOString().slice(0, 10)
+}
+
+async function nextLotNumber(
+  admin: ReturnType<typeof createAdminClient>,
+  orgId: string,
+  prefix: string,
+  datePart: string
+): Promise<string> {
+  const base = `${prefix}-${datePart}`
+  for (let n = 1; n <= 999; n++) {
+    const candidate = `${base}-${String(n).padStart(3, '0')}`
+    const { data } = await admin
+      .from('lots')
+      .select('id')
+      .eq('org_id', orgId)
+      .eq('lot_number', candidate)
+      .maybeSingle()
+    if (!data) return candidate
+  }
+  throw new Error(
+    `Could not generate unique lot number under base "${base}" after 999 attempts`
+  )
+}
+
+/**
+ * Complete a production run.
+ *
+ * Implements the phase-1 spec in
+ * docs/plans/2026-04-16-skus-and-finished-goods.md (Q4/Q8/Q10):
+ *
+ *   1. Validate run is in_progress + all SKUs belong to this org and are
+ *      unit-kind SKUs with a fill_quantity declared.
+ *   2. Read liquid_total from raw production_run_lots already written at
+ *      startRun.
+ *   3. Allocate liquid COGS by volume share (fill_quantity × quantity),
+ *      or honor per-SKU liquidPctOverride if provided (must sum to 1).
+ *   4. FEFO-allocate packaging for each output SKU's sku_packaging BOM
+ *      against ingredient lots where kind='packaging'. Throws
+ *      InsufficientStockError naming SKU + component on shortfall.
+ *   5. Compute unit_cogs per SKU = allocated_cogs_total / quantity.
+ *   6. Auto-generate lot_number = {PREFIX}-{YYYYMMDD}-{NNN}, insert
+ *      finished-goods lots (ingredient_id NULL, sku_id SET), insert
+ *      production_run_outputs (one per output SKU).
+ *   7. Invariant: sum(production_run_outputs.allocated_cogs_total)
+ *      must equal run.total_cogs within ±$0.01, throw on mismatch.
+ *   8. Write qbo_sync_log journal_entry row.
+ *
+ * cost_per_unit is set only for single-SKU runs; multi-SKU sets it to
+ * null (the column is deprecated once more than one output exists).
+ *
+ * Best-effort atomicity: mid-flight failures roll back inserted finished
+ * lots, inserted production_run_outputs, and packaging consumption
+ * written during this call. Raw consumption from startRun is preserved.
+ */
 export async function completeRun(
   orgId: string,
   runId: string,
-  actualYield: number,
+  outputs: CompleteRunOutput[],
   notes: string | null
 ): Promise<void> {
   const admin = createAdminClient()
 
+  if (outputs.length === 0) {
+    throw new RunStateError('At least one output SKU is required')
+  }
+
+  // ── 1. Validate run + SKUs ─────────────────────────────────────────
   const { data: run } = await admin
     .from('production_runs')
-    .select('id, status, expected_yield')
+    .select('id, status, expected_yield, recipe_id, yield_unit')
     .eq('org_id', orgId)
     .eq('id', runId)
     .maybeSingle()
   if (!run) throw new RunStateError('Run not found')
   if (run.status !== 'in_progress') {
-    throw new RunStateError(
-      `Cannot complete a run in state "${run.status}"`
-    )
+    throw new RunStateError(`Cannot complete a run in state "${run.status}"`)
   }
 
-  const { data: consumed } = await admin
+  const seenSkuIds = new Set<string>()
+  for (const o of outputs) {
+    if (seenSkuIds.has(o.skuId)) {
+      throw new RunStateError(
+        `Output SKU ${o.skuId} appears more than once — one row per SKU per run`
+      )
+    }
+    seenSkuIds.add(o.skuId)
+    if (!(Number(o.quantity) > 0)) {
+      throw new RunStateError('Every output quantity must be > 0')
+    }
+  }
+
+  const skuIds = outputs.map((o) => o.skuId)
+  const { data: skuRows } = await admin
+    .from('skus')
+    .select(
+      'id, name, kind, fill_quantity, fill_unit, shelf_life_days, lot_prefix, org_id'
+    )
+    .eq('org_id', orgId)
+    .in('id', skuIds)
+  const skuById = new Map((skuRows ?? []).map((s) => [s.id, s]))
+
+  for (const o of outputs) {
+    const sku = skuById.get(o.skuId)
+    if (!sku) {
+      throw new RunStateError(
+        `SKU ${o.skuId} not found in this organization`
+      )
+    }
+    if (sku.kind !== 'unit') {
+      throw new RunStateError(
+        `SKU "${sku.name}" has kind "${sku.kind}" — phase 1 only supports unit SKUs as run outputs`
+      )
+    }
+    if (sku.fill_quantity == null || Number(sku.fill_quantity) <= 0) {
+      throw new RunStateError(
+        `SKU "${sku.name}" has no fill_quantity declared — required for liquid-COGS allocation`
+      )
+    }
+  }
+
+  // ── 2. Read liquid_total from raw consumption already done ────────
+  // production_run_lots currently contains raw consumption only (packaging
+  // is consumed here, below). Sum before inserting any new rows.
+  const { data: rawConsumption } = await admin
     .from('production_run_lots')
     .select('line_cost')
     .eq('org_id', orgId)
     .eq('production_run_id', runId)
-
-  const totalCogs = (consumed ?? []).reduce(
+  const liquidTotal = (rawConsumption ?? []).reduce(
     (s, r) => s + (Number(r.line_cost) || 0),
     0
   )
-  const costPerUnit = actualYield > 0 ? totalCogs / actualYield : null
-  const expected = run.expected_yield != null ? Number(run.expected_yield) : null
-  const wastePct =
-    expected != null && expected > 0
-      ? Math.max(0, ((expected - actualYield) / expected) * 100)
-      : null
 
-  const update: Database['public']['Tables']['production_runs']['Update'] = {
-    status: 'completed',
-    completed_at: new Date().toISOString(),
-    actual_yield: actualYield,
-    total_cogs: totalCogs,
-    cost_per_unit: costPerUnit,
-    waste_pct: wastePct,
-  }
-  if (notes != null) update.notes = notes
-
-  const { error } = await admin
-    .from('production_runs')
-    .update(update)
-    .eq('id', runId)
-  if (error) throw new Error(error.message)
-
-  // Stub QBO journal entry sync — actual posting happens in a future cron.
-  await admin.from('qbo_sync_log').insert({
-    org_id: orgId,
-    entity_type: 'journal_entry',
-    entity_id: runId,
-    status: 'pending',
+  // ── 3. Liquid-share allocation (volume default, operator override) ──
+  const weights = outputs.map((o) => {
+    const sku = skuById.get(o.skuId)!
+    return Number(sku.fill_quantity) * Number(o.quantity)
   })
+  const weightSum = weights.reduce((a, b) => a + b, 0)
+  if (weightSum <= 0) {
+    throw new RunStateError(
+      'Total volume weight is zero — at least one output must have fill_quantity * quantity > 0'
+    )
+  }
+  const defaultPcts = weights.map((w) => w / weightSum)
+
+  const overridesProvided = outputs.map(
+    (o) => o.liquidPctOverride != null
+  )
+  const anyOverride = overridesProvided.some(Boolean)
+  const allOverride = overridesProvided.every(Boolean)
+  if (anyOverride && !allOverride) {
+    throw new RunStateError(
+      'liquidPctOverride must be provided for every output or none'
+    )
+  }
+
+  let effectivePcts: number[]
+  if (allOverride) {
+    effectivePcts = outputs.map((o) => Number(o.liquidPctOverride))
+    const sum = effectivePcts.reduce((a, b) => a + b, 0)
+    if (Math.abs(sum - 1) > 1e-6) {
+      throw new RunStateError(
+        `liquidPctOverride values must sum to 1.0 (got ${sum.toFixed(6)})`
+      )
+    }
+  } else {
+    effectivePcts = defaultPcts
+  }
+
+  // ── 4. Preview packaging FEFO for every output + BOM entry ────────
+  const enriched: EnrichedOutput[] = []
+  for (let i = 0; i < outputs.length; i++) {
+    const o = outputs[i]
+    const sku = skuById.get(o.skuId)!
+
+    const { data: bomRows } = await admin
+      .from('sku_packaging')
+      .select('ingredient_id, quantity, ingredients(name, kind)')
+      .eq('org_id', orgId)
+      .eq('sku_id', sku.id)
+
+    const boms: PreviewedBom[] = []
+    let packagingCogs = 0
+    for (const bom of bomRows ?? []) {
+      const ing = (
+        bom as unknown as {
+          ingredients: { name: string; kind: string } | null
+        }
+      ).ingredients
+      if (!ing) {
+        throw new RunStateError(
+          `BOM row for SKU "${sku.name}" references a missing ingredient`
+        )
+      }
+      if (ing.kind !== 'packaging') {
+        throw new RunStateError(
+          `BOM for SKU "${sku.name}" references ingredient "${ing.name}" which is kind="${ing.kind}" — only packaging ingredients are allowed`
+        )
+      }
+
+      const need = Number(bom.quantity) * Number(o.quantity)
+      const preview = await previewAllocation(
+        { kind: 'ingredient', id: bom.ingredient_id },
+        need,
+        orgId
+      )
+      if (!preview.ok) {
+        const err = new InsufficientStockError(
+          preview.needed,
+          preview.available
+        )
+        err.message = `Insufficient stock for packaging: SKU "${sku.name}" needs ${preview.needed} ${ing.name}, only ${preview.available} available`
+        throw err
+      }
+
+      const lineCost = preview.allocations.reduce(
+        (s, a) => s + a.quantityUsed * a.unitCost,
+        0
+      )
+      packagingCogs += lineCost
+      boms.push({
+        ingredientId: bom.ingredient_id,
+        ingredientName: ing.name,
+        allocations: preview.allocations,
+        packagingCost: lineCost,
+      })
+    }
+
+    const liquidCogs = liquidTotal * effectivePcts[i]
+    const allocatedTotal = liquidCogs + packagingCogs
+    const unitCogs = allocatedTotal / Number(o.quantity)
+
+    const expiryDate =
+      o.expiryDate ??
+      (sku.shelf_life_days != null
+        ? addDaysISO(today(), Number(sku.shelf_life_days))
+        : null)
+
+    let overrideNote: string | null = null
+    if (allOverride) {
+      overrideNote =
+        o.overrideNote?.trim() ||
+        `default pct ${defaultPcts[i].toFixed(6)} → override ${effectivePcts[i].toFixed(6)}`
+    } else if (o.overrideNote?.trim()) {
+      overrideNote = o.overrideNote.trim()
+    }
+
+    enriched.push({
+      index: i,
+      input: o,
+      sku,
+      pct: effectivePcts[i],
+      defaultPct: defaultPcts[i],
+      liquidCogs,
+      packagingCogs,
+      allocatedTotal,
+      unitCogs,
+      boms,
+      expiryDate,
+      overrideNote,
+    })
+  }
+
+  // ── 5/6. Compute run total + invariant check ──────────────────────
+  const packagingTotal = enriched.reduce((s, e) => s + e.packagingCogs, 0)
+  const totalCogs = liquidTotal + packagingTotal
+  const allocatedSum = enriched.reduce((s, e) => s + e.allocatedTotal, 0)
+  if (Math.abs(allocatedSum - totalCogs) > 0.01) {
+    throw new RunStateError(
+      `Cost invariant failed: sum(allocated_cogs_total) = ${allocatedSum.toFixed(
+        4
+      )} but run total_cogs = ${totalCogs.toFixed(4)} (delta > $0.01)`
+    )
+  }
+
+  // ── 7. Commit phase — all tracked for rollback ────────────────────
+  const tracker: WriteTracker = {
+    packagingConsumed: [],
+    packagingRunLotIds: [],
+    finishedLotIds: [],
+    outputIds: [],
+  }
+  const datePart = todayStamp(today())
+
+  try {
+    for (const e of enriched) {
+      // 7a. Consume packaging per BOM entry.
+      for (const bom of e.boms) {
+        for (const a of bom.allocations) {
+          const { data: lot } = await admin
+            .from('lots')
+            .select('quantity_remaining, status')
+            .eq('id', a.lotId)
+            .maybeSingle()
+          if (!lot) {
+            throw new RunStateError(`Packaging lot ${a.lotId} disappeared`)
+          }
+          const before = Number(lot.quantity_remaining)
+          if (before < a.quantityUsed) {
+            throw new InsufficientStockError(a.quantityUsed, before)
+          }
+          const remaining = before - a.quantityUsed
+          const lotUpdate: Database['public']['Tables']['lots']['Update'] = {
+            quantity_remaining: remaining,
+          }
+          if (remaining <= 0) lotUpdate.status = 'depleted'
+          const { error: updErr } = await admin
+            .from('lots')
+            .update(lotUpdate)
+            .eq('id', a.lotId)
+          if (updErr) throw new Error(updErr.message)
+
+          tracker.packagingConsumed.push({
+            lotId: a.lotId,
+            quantity: a.quantityUsed,
+          })
+
+          const lineCost = a.quantityUsed * a.unitCost
+          const { data: runLotRow, error: insErr } = await admin
+            .from('production_run_lots')
+            .insert({
+              org_id: orgId,
+              production_run_id: runId,
+              lot_id: a.lotId,
+              ingredient_id: bom.ingredientId,
+              quantity_used: a.quantityUsed,
+              unit: 'each',
+              unit_cost_at_use: a.unitCost,
+              line_cost: lineCost,
+            })
+            .select('id')
+            .single()
+          if (insErr) throw new Error(insErr.message)
+          if (runLotRow) tracker.packagingRunLotIds.push(runLotRow.id)
+        }
+      }
+
+      // 7b. Generate lot number + insert finished-goods lot.
+      const prefix =
+        e.sku.lot_prefix ?? buildLotPrefix(e.sku.name) ?? 'LOT'
+      const lotNumber = await nextLotNumber(admin, orgId, prefix, datePart)
+
+      const { data: finishedLot, error: lotErr } = await admin
+        .from('lots')
+        .insert({
+          org_id: orgId,
+          ingredient_id: null,
+          sku_id: e.sku.id,
+          production_run_id: runId,
+          lot_number: lotNumber,
+          quantity_received: Number(e.input.quantity),
+          quantity_remaining: Number(e.input.quantity),
+          unit: 'each',
+          unit_cost: e.unitCogs,
+          received_date: new Date().toISOString().slice(0, 10),
+          expiry_date: e.expiryDate,
+          status: 'available',
+        })
+        .select('id')
+        .single()
+      if (lotErr) throw new Error(lotErr.message)
+      if (!finishedLot) throw new Error('Finished-goods lot insert returned no row')
+      tracker.finishedLotIds.push(finishedLot.id)
+
+      // 7c. Insert production_run_outputs.
+      const { data: outputRow, error: outErr } = await admin
+        .from('production_run_outputs')
+        .insert({
+          org_id: orgId,
+          production_run_id: runId,
+          sku_id: e.sku.id,
+          lot_id: finishedLot.id,
+          quantity: Number(e.input.quantity),
+          cost_allocation_pct: e.pct,
+          allocated_cogs_liquid: e.liquidCogs,
+          allocated_cogs_packaging: e.packagingCogs,
+          allocated_cogs_total: e.allocatedTotal,
+          unit_cogs: e.unitCogs,
+          override_note: e.overrideNote,
+        })
+        .select('id')
+        .single()
+      if (outErr) throw new Error(outErr.message)
+      if (outputRow) tracker.outputIds.push(outputRow.id)
+    }
+
+    // 7d. Update run.
+    const totalQty = outputs.reduce((s, o) => s + Number(o.quantity), 0)
+    const update: Database['public']['Tables']['production_runs']['Update'] = {
+      status: 'completed',
+      completed_at: new Date().toISOString(),
+      actual_yield: totalQty,
+      total_cogs: totalCogs,
+      cost_per_unit:
+        outputs.length === 1 && totalQty > 0 ? totalCogs / totalQty : null,
+      waste_pct: null,
+    }
+    if (notes != null) update.notes = notes
+
+    const { error: runErr } = await admin
+      .from('production_runs')
+      .update(update)
+      .eq('id', runId)
+    if (runErr) throw new Error(runErr.message)
+
+    // 7e. QBO journal-entry sync log (consumed by the future cron).
+    const { error: qboErr } = await admin.from('qbo_sync_log').insert({
+      org_id: orgId,
+      entity_type: 'journal_entry',
+      entity_id: runId,
+      status: 'pending',
+    })
+    if (qboErr) throw new Error(qboErr.message)
+  } catch (err) {
+    await rollbackCompletion(orgId, tracker)
+    throw err
+  }
+}
+
+async function rollbackCompletion(
+  orgId: string,
+  tracker: WriteTracker
+): Promise<void> {
+  const admin = createAdminClient()
+
+  // Delete in dependency order: outputs → finished lots → packaging
+  // run_lots → restore packaging lot quantities.
+  if (tracker.outputIds.length > 0) {
+    await admin
+      .from('production_run_outputs')
+      .delete()
+      .eq('org_id', orgId)
+      .in('id', tracker.outputIds)
+  }
+  if (tracker.finishedLotIds.length > 0) {
+    await admin
+      .from('lots')
+      .delete()
+      .eq('org_id', orgId)
+      .in('id', tracker.finishedLotIds)
+  }
+  if (tracker.packagingRunLotIds.length > 0) {
+    await admin
+      .from('production_run_lots')
+      .delete()
+      .eq('org_id', orgId)
+      .in('id', tracker.packagingRunLotIds)
+  }
+
+  const grouped = new Map<string, number>()
+  for (const c of tracker.packagingConsumed) {
+    grouped.set(c.lotId, (grouped.get(c.lotId) ?? 0) + c.quantity)
+  }
+  for (const [lotId, qty] of grouped) {
+    const { data: lot } = await admin
+      .from('lots')
+      .select('quantity_remaining, status')
+      .eq('id', lotId)
+      .maybeSingle()
+    if (!lot) continue
+    const restored = Number(lot.quantity_remaining) + qty
+    const update: Database['public']['Tables']['lots']['Update'] = {
+      quantity_remaining: restored,
+    }
+    if ((lot as LotRow).status === 'depleted' && restored > 0) {
+      update.status = 'available'
+    }
+    await admin.from('lots').update(update).eq('id', lotId)
+  }
 }
 
 export async function cancelRun(orgId: string, runId: string): Promise<void> {
