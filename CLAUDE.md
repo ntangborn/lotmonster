@@ -4,38 +4,67 @@
 
 ## Session Handoff — Start Here
 
-**Status as of 2026-04-16:** user is mid-way through **Part 9A** — manual
-end-to-end testing of existing features in production at
-https://www.lotmonster.co.
+**Status as of 2026-04-18:** Part 9 (SKUs + finished-goods + packaging +
+multi-SKU completeRun) is **code-complete** and deployed to prod. User is
+about to start **Part 9.10 — Verify Multi-SKU Completion** (manual e2e
+test of the new flow on live data).
 
-**First thing to read:** `docs/part-9a-test-checklist.md` — the 13-section
-printable checklist the user is ticking through. 90-min estimate.
-**`docs/lotmonster-build-guide-v4.md`** is authoritative for everything
-from Part 9 onward (supersedes the v3 guide's Parts 9–15). Contest deadline
-is **Jun 2, 2026 23:59 PT** — submission portal
-https://bdb.perplexityfund.ai/register; details in v4 Part 14.
+**Before next code-writing session, the user plans to do substantial
+manual testing on:**
+1. The multi-SKU Complete-Run dialog (Part 9.10 in v4 guide)
+2. QBO end-to-end sync against sandbox company `Sandbox Company US 74a4`
+   / realm `9341456849762719` (Part 9B — never finished before we jumped
+   ahead to build SKUs)
 
-**When the user reports a test failure**, triage with:
+**First thing to do next session:** ask the user what they found in
+testing. Expect a punch list of bugs / tweaks to fix before moving to
+Part 10 (AI assistant). Don't start new code paths until that list is
+cleared.
+
+**If testing passes cleanly**, the sequence after 9.10 is:
+1. Part 9B — QBO end-to-end (still outstanding — sandbox + journal-entry
+   / bill / invoice round-trips).
+2. Part 10 — AI assistant (`/dashboard/ai`) with Claude tool_use RPC
+   functions that read finished-goods + packaging state correctly.
+3. Parts 11–14 per `docs/lotmonster-build-guide-v4.md` (cron / Stripe /
+   polish / submission).
+
+**When the user reports a failure**, triage with:
 ```bash
 vercel logs --no-follow --since 30m --level error --expand
 ```
 
-**Immediate sequence after 9A passes:** Part 9B (QBO end-to-end against
-sandbox company `Sandbox Company US 74a4`, realm `9341456849762719`) →
-Part 9 SKUs + finished-goods build (~8.5 days, highest-risk milestone is
-the `completeRun` rewrite).
+**Key facts for next session:**
+- Migration 007 (SKUs, `production_run_outputs`, `sku_packaging`,
+  polymorphic `lots`, `ingredients.kind`) is **applied to prod**.
+- The old `/dashboard/production-runs/[id]` "Complete" flow that took
+  a single yield number is **gone** — it now requires at least one
+  linked SKU with `fill_quantity` set before it can complete. An
+  in-progress run we ran during testing (500 bottles of Habanero Hot
+  Sauce, see below) is still sitting in limbo and can be completed now
+  via the new dialog.
+- 123 unit tests pass (`npm run test`). Build is green on main.
+- Vercel auto-deploys from `main` work; don't `vercel --prod` from the
+  local Windows box (it builds a broken bundle — burned us once).
+- `/dashboard/settings` still 404s (Part 13). QBO OAuth callback
+  redirects there, so test QBO flows knowing the final page-load will
+  fail — settled state lives in the DB regardless.
+- Contest deadline: **Jun 2, 2026 23:59 PT**. Submission portal:
+  https://bdb.perplexityfund.ai/register.
 
 **Tools already configured:**
 - Vercel CLI globally installed, authed as `ntangborn-3191`, repo linked
   (`.vercel/project.json` present)
 - Supabase CLI linked to project `vvoyidhqlxjcuhhsdiyy`
 - All env vars synced between `.env.local` and Vercel production
-- Git auto-deploys on push to `main` (verified working; do not `vercel --prod`
-  from local — it builds a Windows-specific bundle that broke auth once)
-- Migration 006 is applied (auto-create org + owner membership on signup)
+- Git auto-deploys on push to `main` (verified working; do not
+  `vercel --prod` from local)
 
-**Don't start writing code for Part 9 until 9A passes.** The user wants to
-verify the existing system is rock-solid before layering in SKUs.
+**Build guide authority:** `docs/lotmonster-build-guide-v4.md` remains
+the authoritative source from Part 9 onward. A Perplexity-revised guide
+was being drafted (see `memory/project_build_guide_swap.md`) — if it
+lands in `docs/` before next session, treat it as superseding v4 and
+update this handoff block to point at the new filename.
 
 ---
 
@@ -120,17 +149,41 @@ curl -sk --ssl-no-revoke -X PATCH \
   Sign Up/Log In buttons. Proper landing page needs to be specced
   (use `bob-builder` agent).
 - **No Settings page yet** — QBO OAuth callback redirects to
-  `/dashboard/settings?qbo=...` which 404s. Build settings shell next.
-- **Recipes have no SKU / Active flag** — schema lacks the columns;
-  list shows Updated date instead. Migration 004 needed if/when wanted.
+  `/dashboard/settings?qbo=...` which 404s. Build settings shell in
+  Part 13.
+- **Recipes have no SKU / Active flag** — schema lacks the columns; the
+  auto-backfilled SKUs from migration 007 partially cover this (one SKU
+  per recipe). Full recipe-versioning UI still not built.
 - **PO order date** uses `created_at` (no separate `order_date` column).
-- **Atomicity**: production-run start/cancel and PO receive do
+- **Atomicity**: production-run start/complete/cancel and PO receive do
   sequential writes via the admin client, with best-effort rollback.
+  `completeRun` is now the most complex — it touches 5 tables (lots
+  decrement, `production_run_lots` insert, `production_run_outputs`
+  insert, finished-goods `lots` insert, `production_runs` update).
   Concurrent operations on the same lot can overdraft. Migrate to a
   Postgres rpc function when concurrency becomes real.
 - **Sales-order traceability**: `lot_numbers_allocated` is a free
   TEXT[]; backward genealogy works via PR-numbers. A formal
-  `sales_order_lots` junction table would be cleaner long-term.
+  `sales_order_lots` junction table would be cleaner long-term (phase 2
+  per the SKU plan).
+- **`production_runs.cost_per_unit` deprecated** for multi-SKU runs.
+  It's `null` whenever a run has more than one output SKU — per-SKU
+  unit-COGS lives on `production_run_outputs` + `lots.unit_cost` now.
+  Single-SKU runs still populate it for backward compat. Any UI/report
+  that displays `cost_per_unit` for completed runs needs updating.
+- **`production_runs.waste_pct` always null** in the new completeRun —
+  the old (expected - actual) / expected formula doesn't translate
+  across mixed SKU units.
+- **Ghost Habanero run from 2026-04-17 testing**: 500 bottles of
+  Habanero Hot Sauce was run through the old single-yield completeRun
+  before the rewrite shipped. The run is marked `completed` in the DB
+  but has zero `production_run_outputs` and zero finished-goods lots —
+  so raw ingredients were consumed, total_cogs is set, but nothing is
+  sellable from it. To clean up: either manually flip
+  `production_runs.status = 'in_progress'` and re-complete via the new
+  multi-SKU dialog, or accept it as a historical artifact and move on.
+  Not blocking — just expect "completed but no inventory" to surface
+  in any reporting that correlates runs with finished lots.
 
 ---
 
@@ -159,6 +212,22 @@ curl -sk --ssl-no-revoke -X PATCH \
   policy (`user_id = auth.uid()`) so `resolveOrgId()` can read the
   membership before the JWT carries `org_id`. Backfill DO-block
   retroactively created orgs for any orphan `auth.users` rows.
+- Migration 007 (applied 2026-04-17): **SKUs + finished goods (phase 1)**.
+  Creates `skus` (18 cols, two CHECK constraints enforcing
+  unit/parent pairing and parent→units_per_parent pairing, partial
+  UNIQUE on `(org_id, upc)`), `production_run_outputs` (per-run per-SKU
+  with split liquid/packaging COGS, UNIQUE `(production_run_id, sku_id)`
+  idempotency guard), `sku_packaging` (BOM junction). Extends
+  `ingredients` with `kind text NOT NULL DEFAULT 'raw' CHECK IN
+  ('raw','packaging')`, extends `lots` to polymorphic (`sku_id` +
+  `production_run_id` nullable, `ingredient_id` relaxed to nullable,
+  XOR CHECK `(ingredient_id IS NOT NULL) <> (sku_id IS NOT NULL)`),
+  swaps the original `lots_fefo_idx` for two partial indexes
+  (`lots_fefo_ingredient_idx`, `lots_fefo_sku_idx`). Adds
+  `sales_order_lines.sku_id` (nullable; tightens to NOT NULL in future
+  migration 008). Inline DO-block backfill created one `kind='unit'`
+  SKU per existing recipe and linked every historical SO line to its
+  SKU, with row-count ASSERTs throughout.
 
 ### Homepage + Dashboard
 - Placeholder homepage with Sign Up / Log In CTAs (`src/app/page.tsx`)
@@ -178,13 +247,20 @@ curl -sk --ssl-no-revoke -X PATCH \
 - Bulk insert server action (`src/lib/actions/ingredients.ts`)
 
 ### Ingredients (`/dashboard/ingredients`)
-- List with search + category filter, current stock + weighted avg cost
-  aggregations, color-coded stock status badges
+- List with Raw/Packaging/All segmented tab (default Raw), search +
+  category filter, current stock + weighted avg cost aggregations,
+  color-coded stock status badges. The "All" tab adds a colored Kind
+  badge column (amber=raw, sky=packaging).
 - Detail with inline edit, delete (refused on FK references), 3 tabs:
   Lots / Used In / Purchase History
-- New form with full schema fields
+- New form: kind radio (Raw / Packaging, default Raw) at top of Basics
 - API: `GET/POST /api/ingredients`, `GET/PATCH/DELETE /api/ingredients/[id]`
-- Shared: `src/lib/ingredients/{schema,queries}.ts` (incl. `resolveOrgId`)
+- **Kind-change lock**: PATCH refuses to change `kind` on an ingredient
+  that already has any lots — returns 409 with
+  `{ error: "cannot change kind: ingredient has lots" }`. Retroactive
+  flips would miscategorize historical inventory.
+- Shared: `src/lib/ingredients/{schema,queries}.ts` (incl. `resolveOrgId`,
+  `INGREDIENT_KINDS`, `IngredientKind`)
 
 ### Lots + FEFO (`/dashboard/lots`)
 - FEFO-sorted list (expiry ASC NULLS LAST, received ASC) with row-tint
@@ -202,17 +278,67 @@ curl -sk --ssl-no-revoke -X PATCH \
 - API: full CRUD at `/api/recipes`, `/api/recipes/[id]`
 - `src/lib/recipes/queries.ts` — `getIngredientAvgCosts` (weighted avg)
 
+### SKUs (`/dashboard/skus`) — phase 1
+- List: table with Name, Kind badge (color-coded unit/case/pallet),
+  UPC, Fill, Retail Price, On-hand (aggregated from `lots.sku_id`).
+  Search, kind filter, active-only toggle.
+- New form: 4 cards (Basics, Packaging & shelf life, Identifiers &
+  pricing, Notes). Kind pills: Unit locked-selected; Case/Pallet
+  disabled with "coming in phase 2" tooltip. Recipe dropdown optional
+  (skus.recipe_id is nullable for resale goods).
+- Detail: 4 stacked sections — (1) Overview (inline-editable), (2)
+  Packaging BOM (editor with server-side packaging-kind filter on
+  ingredient dropdown; `setPackagingBOM` rejects raw ingredients with
+  a clear error), (3) Finished Lots (FEFO-sorted), (4) Production
+  History (joined through `production_run_outputs`).
+- `src/lib/skus/` — `schema.ts` (Zod + pure `buildLotPrefix`),
+  `queries.ts` (listSkus, getSkuDetail, listPackagingIngredients,
+  listRecipesForSelect, getSkuDeletionBlockers), `actions.ts`
+  (createSku, updateSku, deleteSku, setPackagingBOM — all
+  `'use server'`, all gated on `resolveOrgId`).
+- API: `GET/POST /api/skus`, `GET/PATCH/DELETE /api/skus/[id]`,
+  `PUT /api/skus/[id]/packaging` (replaces the full BOM; upsert +
+  delete-missing so a mid-op failure can't wipe an existing BOM).
+- 21 unit tests on `buildLotPrefix` + Zod schemas in
+  `src/lib/__tests__/skus.test.ts`.
+- Sidebar nav: `Tag` icon between Recipes and Production Runs.
+
 ### Production Runs (`/dashboard/production-runs`)
 - List with status chips, /new with live FEFO preview, detail with state
   workflow (Draft → Start → Complete → done; Cancel returns stock)
 - `src/lib/production/actions.ts`:
-  - `startRun` — FEFO allocate + decrement lots + insert
-    production_run_lots (with rollback on mid-run failure)
-  - `completeRun` — sums line_cost as total_cogs, computes waste_pct,
-    inserts `qbo_sync_log` row (entity_type='journal_entry')
+  - `startRun` — FEFO allocate raw ingredients + decrement lots + insert
+    `production_run_lots` (with rollback on mid-run failure)
+  - `completeRun(orgId, runId, outputs, notes)` — **rewritten 2026-04-18**
+    for multi-SKU output. Signature takes
+    `outputs: Array<{ skuId, quantity, expiryDate?, liquidPctOverride?, overrideNote? }>`.
+    Phases: validate run + SKUs → read liquid_total from existing
+    production_run_lots → resolve each SKU's sku_packaging BOM via
+    previewAllocation → call `planCompleteRun` (pure math module) →
+    commit (decrement packaging lots, insert packaging production_run_lots,
+    auto-generate `{PREFIX}-{YYYYMMDD}-{NNN}` lot numbers, insert
+    polymorphic finished-goods lots, insert production_run_outputs) →
+    update run → insert qbo_sync_log. Best-effort rollback tracks every
+    write and reverses in dependency order on failure. Throws
+    `InsufficientStockError` (name references SKU + component) or
+    `RunStateError` on invariant failure. See
+    `docs/plans/2026-04-16-skus-and-finished-goods.md` Q4/Q8/Q10.
   - `cancelRun` — returns qty to lots, restores 'available'
+- `src/lib/production/complete-run-math.ts` — pure cost math module.
+  `planCompleteRun(input)` + `assertCostInvariant(...)`. 10 unit tests
+  in `src/lib/__tests__/production-complete-run.test.ts`.
 - Auto run number: `PR-{YYYY}-{NNN}`
-- API: full CRUD + `/start`, `/complete`, `/cancel`, `/preview`
+- API: full CRUD + `/start`, `/complete`, `/cancel`, `/preview`.
+  `/complete` now takes `{ outputs[], notes }` via `productionCompleteSchema`.
+- **Complete-Run dialog** (`src/app/dashboard/production-runs/[id]/_components/detail.tsx`):
+  5 sections — (1) per-SKU Quantity + editable Expiry, (2) live
+  7-column cost-preview table (Liquid %, Liquid $, Packaging $, Total,
+  Unit COGS) recomputed via `useMemo`, (3) red shortfall alert if any
+  BOM component is short (submit disabled), (4) collapsible override
+  panel (all-or-none %, must sum to 100% ± 0.05), (5) Notes. Empty
+  state guides the user to create a SKU if the recipe has none linked.
+  Preview uses weighted-avg packaging cost; server's real FEFO
+  computes authoritative numbers on submit.
 
 ### Purchase Orders (`/dashboard/purchase-orders`)
 - List with status chips, /new with supplier autocomplete + "Add from
@@ -289,9 +415,14 @@ curl -sk --ssl-no-revoke -X PATCH \
 - `src/app/api/ai/extract-ingredients/route.ts` — Claude Vision for images/PDFs
 - `src/app/api/ai/onboarding-chat/route.ts` — streaming chat for Path C
 
-### Tests
+### Tests (123 passing, `npm run test`)
 - `src/lib/__tests__/units.test.ts` — unit conversions
-- `src/lib/__tests__/cogs.test.ts` — COGS math + bucketing
+- `src/lib/__tests__/cogs.test.ts` — COGS math + bucketing (19 tests)
+- `src/lib/__tests__/skus.test.ts` — SKU/BOM Zod schemas + `buildLotPrefix` (21)
+- `src/lib/__tests__/production-complete-run.test.ts` — `planCompleteRun`
+  cost math + invariant + override + shortfall (10 tests using the
+  spec's Q8 fixture: liquid_total $120, 40×16oz + 20×32oz → unit_cogs
+  $1.90 / $3.55)
 
 ### Infrastructure
 - `src/proxy.ts` — Next.js 16 middleware (named export `proxy`, not `middleware`)
@@ -381,23 +512,24 @@ Old guide → new plan map:
 
 Each item now has a home in the revised plan. Rough order of operations:
 
-- **Part 9A (next):** End-to-end manual test of all completed features
-  in production. Plan has the click-by-click test script.
-- **Part 9B:** QBO end-to-end verification using sandbox company
-  `Sandbox Company US 74a4` (realm `9341456849762719`). Account
-  mappings are still direct-DB-insert (no UI yet — settings shell is
-  Part 13).
-- **Part 9 (SKUs + Finished Goods):** Migrations 007+, polymorphic
-  lots, packaging-as-ingredients, multi-SKU `completeRun` rewrite,
-  finished-goods FEFO. *This is the highest-risk milestone — the
-  `completeRun` rewrite touches 5 tables atomically with best-effort
-  rollback.*
+- **Part 9.10 (NEXT — user testing):** End-to-end verification of the
+  multi-SKU Complete-Run flow on live data. Create a SKU with a
+  packaging BOM, start a run, complete via the new dialog, verify
+  finished lots + production_run_outputs land correctly and
+  /dashboard/skus/{id} shows the new on-hand.
+- **Part 9B (still outstanding):** QBO end-to-end verification using
+  sandbox company `Sandbox Company US 74a4` (realm `9341456849762719`).
+  Journal-entry, bill, and invoice round-trips. Account mappings are
+  still direct-DB-insert (no UI yet — settings shell is Part 13).
 - **Part 10:** AI assistant (`/dashboard/ai` page + 10–11 Claude
-  tool_use RPC functions, several rewritten to acknowledge finished
-  goods + packaging).
+  tool_use RPC functions, several need to acknowledge finished goods +
+  packaging — e.g. "what's my finished-goods inventory?" now has real
+  data to query).
 - **Part 11:** `/api/cron/qbo-sync` dispatcher (Vercel cron on
   every-15-min cadence — *requires Vercel Pro*; Hobby is 1/day).
-- **Part 12:** Stripe billing.
+  Migration 011 for `qbo_sync_log` retry columns
+  (`attempt_count`, `last_attempted_at`, `error_message`).
+- **Part 12:** Stripe billing (migration 012).
 - **Part 13:** Demo seeder + polish, including the `/dashboard/settings`
   shell that fixes the QBO callback 404.
 - **Part 14:** Security audit + contest submission (rotate the leaked
@@ -406,12 +538,19 @@ Each item now has a home in the revised plan. Rough order of operations:
 
 Other existing TODOs not in the new plan (phase 2/3 backlog at the end
 of the revised plan):
+- Migration 008 — tighten `sales_order_lines.sku_id` to NOT NULL once
+  all app paths populate it. Keep `recipe_id` as a safety net through
+  one more deploy.
 - Recipe edit page (`/dashboard/recipes/[id]/edit`) — PATCH API works,
   needs UI
 - Real landing page
 - Lot detail page (have list, no detail)
 - Forecasting / replenishment recommendations
 - Multi-user member management beyond signup-creates-org
+- Case / pallet SKUs (`kind != 'unit'`) + `case_pack_events` + case
+  pricing display toggle on invoices — phase 2 per the SKU plan.
+- `sales_order_line_lots` junction to replace the free-text
+  `lot_numbers_allocated` — also phase 2.
 
 ## Recently resolved (2026-04-16 session)
 
@@ -464,3 +603,69 @@ were aligned to v4 canonical naming after a consistency pass:
 ### Test checklist for 9A
 `docs/part-9a-test-checklist.md` written as the printable version of
 v4's Part 9A. 13 sections, ~90 min total. User is ticking through it now.
+
+## Recently resolved (2026-04-17 → 2026-04-18 session)
+
+### Auth / deploy fixes surfaced by 9A testing
+- **Logout 405** — the sign-out `<form>` POSTed to
+  `/api/auth/logout`, which `NextResponse.redirect`ed with default
+  status 307 (method-preserving). Browser then POSTed to `/login`
+  (page route, GET-only) → 405. Fixed with `status: 303`. Shell also
+  moved to a client-side `supabase.auth.signOut()` button earlier in
+  the same session.
+- **Stale rollback pin** — production was still aliased to the
+  `g7qckfojb` deploy (the rollback target from the Windows-built bad
+  bundle). `vercel promote` resolved it, and subsequent `git push`
+  auto-promotions started working again.
+- **Empty-org onboarding trap** — fresh signups hitting /dashboard
+  before loading ingredients landed on an empty dashboard with no
+  onramp. Dashboard now redirects to `/dashboard/onboarding` when the
+  org has zero ingredient rows. Login drops the brittle 60-sec
+  new-user heuristic (would fail if OTP email delivery took >60s)
+  and routes everyone to /dashboard. Sidebar nav gained an always-
+  visible "Add Ingredients" entry.
+- **White-on-white `<select>` options** — dark-themed `<select>` popups
+  rendered `<option>` with OS light defaults, invisible until hover.
+  Global CSS rule in `globals.css` forces all `<option>` to dark
+  palette (`#0D1B2A` bg, white text, teal hover/selected). Covers 20+
+  `<select>` instances in one shot.
+
+### Part 9 built in-session (code-complete, awaiting user verification)
+- **Migration 007** applied to prod — SKUs, production_run_outputs,
+  sku_packaging, polymorphic lots, ingredients.kind. See Database
+  section above for the full schema.
+- **DB types regenerated** — `src/types/database.ts` now includes all
+  new tables + nullable `lots.ingredient_id`. Six call sites that
+  aggregated lots keyed on `ingredient_id` got null-guards:
+  `src/app/dashboard/page.tsx`, `src/components/low-stock-alerts.tsx`,
+  `src/lib/cogs.ts`, `src/lib/ingredients/queries.ts`,
+  `src/lib/purchase-orders/queries.ts`, `src/lib/recipes/queries.ts`.
+  `LotRef.ingredient_id` widened to `string | null` in traceability;
+  the deep-link to `/dashboard/ingredients/{id}` only renders when
+  ingredient_id is set.
+- **FEFO allocator** (`src/lib/fefo.ts`) refactored to take
+  `AllocationTarget = { kind: 'ingredient' | 'sku'; id: string }`.
+  Internally flips `column = target.kind === 'sku' ? 'sku_id' :
+  'ingredient_id'`. Existing raw-ingredient callers unchanged.
+- **SKU module + UI** — `src/lib/skus/`, `/dashboard/skus` list/new/
+  detail. Kind-pills on the new form lock Unit-selected, disable Case
+  and Pallet with "coming in phase 2" tooltip. Detail page has the
+  packaging-BOM editor that server-side rejects raw ingredients.
+- **Ingredients Raw/Packaging** — tab filter on the list (default
+  Raw), radio on the new form, PATCH lock on kind-change when the
+  ingredient has lots.
+- **`completeRun` rewrite** — multi-SKU outputs, split liquid/packaging
+  COGS, invariant check, rollback on failure. Extracted the pure math
+  into `src/lib/production/complete-run-math.ts` so it's unit-testable;
+  10 tests added using the spec's Q8 fixture.
+- **Complete-Run dialog rebuilt** — 5-section modal with live cost
+  preview, packaging shortfall warning, collapsible override panel.
+  Empty state when no SKUs are linked to the recipe. Preview uses
+  weighted-avg packaging cost; authoritative FEFO costs land on
+  submit.
+
+### Ghost run from testing
+During the same session the user ran 500 bottles of Habanero Hot Sauce
+through the OLD single-yield completeRun (before the rewrite shipped).
+The run is marked `completed` but has zero finished-goods lots. See
+Known Issues above for cleanup options.
