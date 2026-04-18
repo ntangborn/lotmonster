@@ -2,7 +2,11 @@ export const dynamic = 'force-dynamic'
 
 import { notFound, redirect } from 'next/navigation'
 import { resolveOrgId } from '@/lib/ingredients/queries'
-import { getRunDetail, previewProductionRun } from '@/lib/production/queries'
+import {
+  getRunDetail,
+  previewProductionRun,
+  getCompleteRunContext,
+} from '@/lib/production/queries'
 import { RunDetailView } from './_components/detail'
 
 export default async function RunDetailPage({
@@ -30,5 +34,16 @@ export default async function RunDetailPage({
         )
       : null
 
-  return <RunDetailView initial={detail} planPreview={planPreview} />
+  const completeContext =
+    detail.run.status === 'in_progress'
+      ? await getCompleteRunContext(orgId, id)
+      : null
+
+  return (
+    <RunDetailView
+      initial={detail}
+      planPreview={planPreview}
+      completeContext={completeContext}
+    />
+  )
 }
