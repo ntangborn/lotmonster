@@ -12,10 +12,16 @@ export const UNITS = [
   'each',
 ] as const
 
+export const INGREDIENT_KINDS = ['raw', 'packaging'] as const
+export type IngredientKind = (typeof INGREDIENT_KINDS)[number]
+
 export const ingredientCreateSchema = z.object({
   name: z.string().trim().min(1, 'Name is required').max(200),
   sku: z.string().trim().max(100).optional().nullable(),
   unit: z.enum(UNITS, { error: () => ({ message: 'Invalid unit' }) }),
+  kind: z
+    .enum(INGREDIENT_KINDS, { error: () => ({ message: 'Invalid kind' }) })
+    .optional(),
   category: z.string().trim().max(100).optional().nullable(),
   low_stock_threshold: z.number().nonnegative().optional().nullable(),
   cost_per_unit: z.number().positive().optional().nullable(),

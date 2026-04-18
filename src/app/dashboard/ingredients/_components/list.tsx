@@ -4,7 +4,9 @@ import { useMemo, useState } from 'react'
 import Link from 'next/link'
 import { Search } from 'lucide-react'
 import type { IngredientWithAggregates } from '@/lib/ingredients/queries'
-import type { StockStatus } from '@/lib/ingredients/schema'
+import type { StockStatus, IngredientKind } from '@/lib/ingredients/schema'
+
+type KindTab = IngredientKind | 'all'
 
 interface Props {
   initialRows: IngredientWithAggregates[]
@@ -42,10 +44,20 @@ function fmtCost(n: number | null): string {
 export function IngredientsList({ initialRows, categories }: Props) {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState<string>('')
+  const [kindTab, setKindTab] = useState<KindTab>('raw')
+
+  const rawCount = initialRows.filter(
+    (r) => (r.kind ?? 'raw') === 'raw'
+  ).length
+  const packagingCount = initialRows.filter(
+    (r) => r.kind === 'packaging'
+  ).length
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase()
     return initialRows.filter((r) => {
+      const rowKind = r.kind ?? 'raw'
+      if (kindTab !== 'all' && rowKind !== kindTab) return false
       if (category && r.category !== category) return false
       if (!term) return true
       return (
@@ -53,10 +65,31 @@ export function IngredientsList({ initialRows, categories }: Props) {
         (r.sku ?? '').toLowerCase().includes(term)
       )
     })
-  }, [initialRows, search, category])
+  }, [initialRows, search, category, kindTab])
 
   return (
     <div>
+      <div className="mb-3 inline-flex rounded-lg border border-white/10 bg-white/[0.03] p-1">
+        <KindTabButton
+          active={kindTab === 'raw'}
+          onClick={() => setKindTab('raw')}
+        >
+          Raw <Count>{rawCount}</Count>
+        </KindTabButton>
+        <KindTabButton
+          active={kindTab === 'packaging'}
+          onClick={() => setKindTab('packaging')}
+        >
+          Packaging <Count>{packagingCount}</Count>
+        </KindTabButton>
+        <KindTabButton
+          active={kindTab === 'all'}
+          onClick={() => setKindTab('all')}
+        >
+          All <Count>{initialRows.length}</Count>
+        </KindTabButton>
+      </div>
+
       <div className="mb-4 flex flex-col gap-3 sm:flex-row">
         <div className="relative flex-1">
           <Search
@@ -92,6 +125,9 @@ export function IngredientsList({ initialRows, categories }: Props) {
               <th className="px-4 py-3 font-medium">Name</th>
               <th className="px-4 py-3 font-medium">SKU</th>
               <th className="px-4 py-3 font-medium">Unit</th>
+              {kindTab === 'all' && (
+                <th className="px-4 py-3 font-medium">Kind</th>
+              )}
               <th className="px-4 py-3 font-medium">Category</th>
               <th className="px-4 py-3 text-right font-medium">Stock</th>
               <th className="px-4 py-3 text-right font-medium">Avg Cost</th>
@@ -101,7 +137,10 @@ export function IngredientsList({ initialRows, categories }: Props) {
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-12 text-center text-white/40">
+                <td
+                  colSpan={kindTab === 'all' ? 8 : 7}
+                  className="px-4 py-12 text-center text-white/40"
+                >
                   {initialRows.length === 0
                     ? 'No ingredients yet. Click "Add Ingredient" to create one.'
                     : 'No ingredients match your filters.'}
@@ -123,6 +162,15 @@ export function IngredientsList({ initialRows, categories }: Props) {
                   </td>
                   <td className="px-4 py-3 text-white/60">{r.sku ?? '—'}</td>
                   <td className="px-4 py-3 text-white/60">{r.unit}</td>
+                  {kindTab === 'all' && (
+                    <td className="px-4 py-3">
+                      <KindBadge
+                        kind={(r.kind === 'packaging'
+                          ? 'packaging'
+                          : 'raw') as IngredientKind}
+                      />
+                    </td>
+                  )}
                   <td className="px-4 py-3 text-white/60">
                     {r.category ?? '—'}
                   </td>
@@ -146,5 +194,51 @@ export function IngredientsList({ initialRows, categories }: Props) {
         </table>
       </div>
     </div>
+  )
+}
+
+function KindTabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+        active
+          ? 'bg-teal-500/20 text-teal-200'
+          : 'text-white/60 hover:bg-white/5 hover:text-white/90'
+      }`}
+    >
+      {children}
+    </button>
+  )
+}
+
+function Count({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="ml-1.5 rounded-sm bg-white/10 px-1.5 py-0.5 text-[10px] font-mono text-white/60">
+      {children}
+    </span>
+  )
+}
+
+const KIND_BADGE: Record<IngredientKind, string> = {
+  raw: 'bg-amber-500/10 text-amber-300 border-amber-500/30',
+  packaging: 'bg-sky-500/10 text-sky-300 border-sky-500/30',
+}
+
+function KindBadge({ kind }: { kind: IngredientKind }) {
+  return (
+    <span
+      className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${KIND_BADGE[kind]}`}
+    >
+      {kind}
+    </span>
   )
 }

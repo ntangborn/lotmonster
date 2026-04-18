@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ChevronLeft, Loader2 } from 'lucide-react'
-import { UNITS } from '@/lib/ingredients/schema'
+import { UNITS, INGREDIENT_KINDS, type IngredientKind } from '@/lib/ingredients/schema'
 
 type State = 'idle' | 'saving' | 'error'
 
@@ -15,6 +15,7 @@ export default function NewIngredientPage() {
 
   const [name, setName] = useState('')
   const [sku, setSku] = useState('')
+  const [kind, setKind] = useState<IngredientKind>('raw')
   const [unit, setUnit] = useState<string>('oz')
   const [category, setCategory] = useState('')
   const [lowStockThreshold, setLowStockThreshold] = useState('')
@@ -43,6 +44,7 @@ export default function NewIngredientPage() {
       name: name.trim(),
       sku: sku.trim() || null,
       unit,
+      kind,
       category: category.trim() || null,
       low_stock_threshold: toNumberOrNull(lowStockThreshold),
       cost_per_unit: toNumberOrNull(costPerUnit),
@@ -94,6 +96,38 @@ export default function NewIngredientPage() {
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <Card title="Basics">
+          <div className="mb-4">
+            <span className="mb-2 block text-xs font-medium text-white/50">
+              Kind <span className="ml-1 text-red-400">*</span>
+            </span>
+            <div className="flex flex-wrap gap-2">
+              {INGREDIENT_KINDS.map((k) => (
+                <label
+                  key={k}
+                  className={`flex cursor-pointer items-center gap-2 rounded-full border px-4 py-1.5 text-xs font-medium transition-colors ${
+                    kind === k
+                      ? 'border-teal-400 bg-teal-500/20 text-teal-200'
+                      : 'border-white/10 bg-white/5 text-white/60 hover:bg-white/10'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="kind"
+                    value={k}
+                    checked={kind === k}
+                    onChange={() => setKind(k)}
+                    disabled={state === 'saving'}
+                    className="sr-only"
+                  />
+                  {k === 'raw' ? 'Raw' : 'Packaging'}
+                </label>
+              ))}
+            </div>
+            <p className="mt-1 text-xs text-white/30">
+              Raw goes into recipes. Packaging (bottles, caps, labels) goes on
+              SKU BOMs.
+            </p>
+          </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Name" required>
               <input

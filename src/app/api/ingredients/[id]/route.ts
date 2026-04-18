@@ -61,6 +61,34 @@ export async function PATCH(
   }
 
   const admin = createAdminClient()
+
+  // Lock: kind cannot be changed once the ingredient has any lots —
+  // retroactive flips would miscategorize historical inventory.
+  if (parsed.data.kind !== undefined) {
+    const { data: current } = await admin
+      .from('ingredients')
+      .select('kind')
+      .eq('org_id', auth.orgId)
+      .eq('id', id)
+      .maybeSingle()
+    if (!current) {
+      return NextResponse.json({ error: 'not_found' }, { status: 404 })
+    }
+    if (current.kind !== parsed.data.kind) {
+      const { count } = await admin
+        .from('lots')
+        .select('id', { count: 'exact', head: true })
+        .eq('org_id', auth.orgId)
+        .eq('ingredient_id', id)
+      if ((count ?? 0) > 0) {
+        return NextResponse.json(
+          { error: 'cannot change kind: ingredient has lots' },
+          { status: 409 }
+        )
+      }
+    }
+  }
+
   const { data, error } = await admin
     .from('ingredients')
     .update(parsed.data)
