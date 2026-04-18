@@ -176,6 +176,7 @@ export async function getLowStockSuggestions(
   const stock = new Map<string, number>()
   const lastCost = new Map<string, number>()
   for (const l of lots ?? []) {
+    if (!l.ingredient_id) continue
     stock.set(
       l.ingredient_id,
       (stock.get(l.ingredient_id) ?? 0) +

@@ -68,6 +68,7 @@ async function loadDashboard(orgId: string): Promise<DashboardData> {
 
   const stockByIngredient = new Map<string, number>()
   for (const lot of lotsRaw) {
+    if (!lot.ingredient_id) continue
     stockByIngredient.set(
       lot.ingredient_id,
       (stockByIngredient.get(lot.ingredient_id) ?? 0) +
@@ -78,6 +79,7 @@ async function loadDashboard(orgId: string): Promise<DashboardData> {
   const expiringSoon: ExpiringLot[] = []
   let expiringThisWeekCount = 0
   for (const lot of lotsRaw) {
+    if (!lot.ingredient_id) continue
     if (!lot.expiry_date) continue
     const exp = new Date(lot.expiry_date).getTime()
     const delta = exp - now
@@ -130,7 +132,9 @@ async function loadDashboard(orgId: string): Promise<DashboardData> {
   })
 
   const totalActiveIngredients = new Set(
-    lotsRaw.map((l) => l.ingredient_id)
+    lotsRaw
+      .map((l) => l.ingredient_id)
+      .filter((id): id is string => id !== null)
   ).size
 
   return {

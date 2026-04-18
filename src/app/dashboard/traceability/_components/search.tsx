@@ -544,12 +544,16 @@ function LotCard({ lot }: { lot: ForwardTraceResult['lot'] }) {
         <span className="text-xs text-white/40">{lot.unit}</span>
       </div>
       <p className="mt-1 text-sm text-white/80">
-        <Link
-          href={`/dashboard/ingredients/${lot.ingredient_id}`}
-          className="hover:text-teal-300"
-        >
-          {lot.ingredient_name}
-        </Link>
+        {lot.ingredient_id ? (
+          <Link
+            href={`/dashboard/ingredients/${lot.ingredient_id}`}
+            className="hover:text-teal-300"
+          >
+            {lot.ingredient_name}
+          </Link>
+        ) : (
+          <span>{lot.ingredient_name}</span>
+        )}
         {lot.ingredient_sku && (
           <span className="ml-1.5 text-xs text-white/40">
             ({lot.ingredient_sku})

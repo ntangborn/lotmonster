@@ -86,6 +86,7 @@ export async function listIngredients(
     LotRow,
     'ingredient_id' | 'quantity_remaining' | 'unit_cost'
   >[]) {
+    if (!lot.ingredient_id) continue
     const cur = agg.get(lot.ingredient_id) ?? { stock: 0, costSum: 0 }
     const qty = Number(lot.quantity_remaining) || 0
     const cost = Number(lot.unit_cost) || 0

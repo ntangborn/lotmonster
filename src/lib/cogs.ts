@@ -320,11 +320,13 @@ export async function calculateRecipeEstimatedCOGS(
     .gt('quantity_remaining', 0)
     .in('ingredient_id', ingredientIds)
 
-  const availableLots: AvailableLot[] = (lots ?? []).map((l) => ({
-    ingredient_id: l.ingredient_id,
-    quantity_remaining: Number(l.quantity_remaining) || 0,
-    unit_cost: Number(l.unit_cost) || 0,
-  }))
+  const availableLots: AvailableLot[] = (lots ?? [])
+    .filter((l): l is typeof l & { ingredient_id: string } => l.ingredient_id !== null)
+    .map((l) => ({
+      ingredient_id: l.ingredient_id,
+      quantity_remaining: Number(l.quantity_remaining) || 0,
+      unit_cost: Number(l.unit_cost) || 0,
+    }))
 
   return computeRecipeEstimatedCOGS(
     recipeLines,

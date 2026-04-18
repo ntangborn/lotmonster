@@ -32,7 +32,7 @@ export interface RunRef {
 export interface LotRef {
   id: string
   lot_number: string
-  ingredient_id: string
+  ingredient_id: string | null
   ingredient_name: string
   ingredient_sku: string | null
   supplier: string | null

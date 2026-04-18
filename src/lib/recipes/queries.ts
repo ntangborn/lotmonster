@@ -57,6 +57,7 @@ export async function getIngredientAvgCosts(
 
   const acc = new Map<string, { stock: number; costSum: number }>()
   for (const l of data ?? []) {
+    if (!l.ingredient_id) continue
     const qty = Number(l.quantity_remaining) || 0
     const cost = Number(l.unit_cost) || 0
     const cur = acc.get(l.ingredient_id) ?? { stock: 0, costSum: 0 }
