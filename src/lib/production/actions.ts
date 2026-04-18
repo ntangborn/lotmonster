@@ -50,7 +50,11 @@ export async function startRun(orgId: string, runId: string): Promise<void> {
   try {
     for (const line of lines) {
       const need = Number(line.quantity) * multiplier
-      const allocations = await allocateLots(line.ingredient_id, need, orgId)
+      const allocations = await allocateLots(
+        { kind: 'ingredient', id: line.ingredient_id },
+        need,
+        orgId
+      )
 
       for (const a of allocations) {
         const { data: lot } = await admin

@@ -115,7 +115,7 @@ export async function previewProductionRun(
       }
     ).ingredients
     const preview = await previewAllocation(
-      line.ingredient_id,
+      { kind: 'ingredient', id: line.ingredient_id },
       required,
       orgId
     )

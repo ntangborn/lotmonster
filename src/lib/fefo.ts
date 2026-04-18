@@ -8,6 +8,10 @@ export interface LotAllocation {
   expiryDate: string | null
 }
 
+export type AllocationTarget =
+  | { kind: 'ingredient'; id: string }
+  | { kind: 'sku'; id: string }
+
 export class InsufficientStockError extends Error {
   constructor(
     public readonly needed: number,
@@ -28,24 +32,27 @@ export class InsufficientStockError extends Error {
  * the returned allocations into an atomic write that decrements
  * quantity_remaining and marks depleted lots.
  *
- * Sort order: expiry_date ASC NULLS LAST, then received_date ASC.
- * Matches the `lots_fefo_idx` index on (org_id, ingredient_id, expiry_date).
+ * Polymorphic: `target.kind` flips the query column — 'ingredient' selects
+ * raw/packaging ingredient lots (indexed by lots_fefo_ingredient_idx),
+ * 'sku' selects finished-goods lots (lots_fefo_sku_idx). Sort order in
+ * both cases: expiry_date ASC NULLS LAST, then received_date ASC.
  *
- * Throws InsufficientStockError if the total available is less than needed.
+ * Throws InsufficientStockError if total available is less than needed.
  */
 export async function allocateLots(
-  ingredientId: string,
+  target: AllocationTarget,
   quantityNeeded: number,
   orgId: string
 ): Promise<LotAllocation[]> {
   if (quantityNeeded <= 0) return []
 
   const admin = createAdminClient()
+  const column = target.kind === 'sku' ? 'sku_id' : 'ingredient_id'
   const { data: lots, error } = await admin
     .from('lots')
     .select('id, lot_number, quantity_remaining, unit_cost, expiry_date, received_date')
     .eq('org_id', orgId)
-    .eq('ingredient_id', ingredientId)
+    .eq(column, target.id)
     .eq('status', 'available')
     .gt('quantity_remaining', 0)
     .order('expiry_date', { ascending: true, nullsFirst: false })
@@ -85,7 +92,7 @@ export async function allocateLots(
  * without throwing. Useful for UI that wants to show shortage details.
  */
 export async function previewAllocation(
-  ingredientId: string,
+  target: AllocationTarget,
   quantityNeeded: number,
   orgId: string
 ): Promise<
@@ -93,7 +100,7 @@ export async function previewAllocation(
   | { ok: false; needed: number; available: number }
 > {
   try {
-    const allocations = await allocateLots(ingredientId, quantityNeeded, orgId)
+    const allocations = await allocateLots(target, quantityNeeded, orgId)
     return { ok: true, allocations }
   } catch (e) {
     if (e instanceof InsufficientStockError) {
