@@ -33,7 +33,13 @@ export async function GET(
     return NextResponse.json({ suggestions: {} })
   }
 
-  const recipeIds = Array.from(new Set(lines.map((l) => l.recipe_id)))
+  const recipeIds = Array.from(
+    new Set(
+      lines
+        .map((l) => l.recipe_id)
+        .filter((r): r is string => r !== null)
+    )
+  )
   const byRecipe = new Map<
     string,
     Awaited<ReturnType<typeof suggestRunsForOrderLine>>
@@ -47,7 +53,7 @@ export async function GET(
 
   const out: Record<string, ReturnType<typeof suggestRunsForOrderLine> extends Promise<infer T> ? T : never> = {}
   for (const l of lines) {
-    out[l.id] = byRecipe.get(l.recipe_id) ?? []
+    out[l.id] = l.recipe_id ? byRecipe.get(l.recipe_id) ?? [] : []
   }
   return NextResponse.json({ suggestions: out })
 }

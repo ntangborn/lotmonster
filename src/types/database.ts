@@ -760,9 +760,9 @@ export type Database = {
           lot_numbers_allocated: string[] | null
           org_id: string
           quantity: number
-          recipe_id: string
+          recipe_id: string | null
           sales_order_id: string
-          sku_id: string | null
+          sku_id: string
           unit: string
           unit_price: number | null
         }
@@ -772,9 +772,9 @@ export type Database = {
           lot_numbers_allocated?: string[] | null
           org_id: string
           quantity: number
-          recipe_id: string
+          recipe_id?: string | null
           sales_order_id: string
-          sku_id?: string | null
+          sku_id: string
           unit?: string
           unit_price?: number | null
         }
@@ -784,9 +784,9 @@ export type Database = {
           lot_numbers_allocated?: string[] | null
           org_id?: string
           quantity?: number
-          recipe_id?: string
+          recipe_id?: string | null
           sales_order_id?: string
-          sku_id?: string | null
+          sku_id?: string
           unit?: string
           unit_price?: number | null
         }
@@ -1021,6 +1021,131 @@ export type Database = {
     Functions: {
       current_org_id: { Args: never; Returns: string }
       ensure_org_for_user: { Args: { p_user_id: string }; Returns: string }
+      execute_ai_query: {
+        Args: { p_function_name: string; p_params: Json }
+        Returns: Json
+      }
+      get_cogs_summary: {
+        Args: {
+          p_end_date: string
+          p_granularity?: string
+          p_org_id: string
+          p_start_date: string
+        }
+        Returns: Json
+      }
+      get_expiring_lots: {
+        Args: {
+          p_days_ahead?: number
+          p_include_expired?: boolean
+          p_kind?: string
+          p_org_id: string
+        }
+        Returns: {
+          days_until_expiry: number
+          expiry_date: string
+          ingredient_id: string
+          item_name: string
+          kind: string
+          lot_id: string
+          lot_number: string
+          quantity_remaining: number
+          sku_id: string
+          unit: string
+        }[]
+      }
+      get_finished_goods_status: {
+        Args: {
+          p_only_in_stock?: boolean
+          p_org_id: string
+          p_sku_name?: string
+        }
+        Returns: {
+          earliest_expiry: string
+          fill_quantity: number
+          fill_unit: string
+          lot_count: number
+          on_hand: number
+          retail_price: number
+          sku_id: string
+          sku_name: string
+          weighted_avg_unit_cost: number
+        }[]
+      }
+      get_ingredient_cost_history: {
+        Args: {
+          p_ingredient_name: string
+          p_months_back?: number
+          p_org_id: string
+        }
+        Returns: {
+          ingredient_name: string
+          landed_cost: number
+          po_number: string
+          quantity_received: number
+          received_date: string
+          supplier: string
+          unit: string
+          unit_cost: number
+        }[]
+      }
+      get_inventory_valuation: {
+        Args: { p_kind?: string; p_org_id: string; p_top_n?: number }
+        Returns: Json
+      }
+      get_lot_traceability: {
+        Args: { p_direction?: string; p_lot_number: string; p_org_id: string }
+        Returns: Json
+      }
+      get_low_stock_ingredients: {
+        Args: {
+          p_include_no_threshold?: boolean
+          p_kind?: string
+          p_org_id: string
+        }
+        Returns: {
+          current_stock: number
+          default_supplier: string
+          ingredient_id: string
+          ingredient_name: string
+          kind: string
+          low_stock_threshold: number
+          out_of_stock: boolean
+          unit: string
+        }[]
+      }
+      get_production_run_detail: {
+        Args: { p_org_id: string; p_run_number: string }
+        Returns: Json
+      }
+      get_recipe_cost_estimate: {
+        Args: {
+          p_batch_multiplier?: number
+          p_org_id: string
+          p_recipe_name: string
+        }
+        Returns: Json
+      }
+      get_sales_summary: {
+        Args: {
+          p_end_date: string
+          p_org_id: string
+          p_sku_name?: string
+          p_start_date: string
+          p_status?: string
+        }
+        Returns: Json
+      }
+      get_supplier_spend: {
+        Args: { p_end_date: string; p_org_id: string; p_start_date: string }
+        Returns: {
+          po_count: number
+          supplier: string
+          top_ingredient: string
+          top_ingredient_spend: number
+          total_spend: number
+        }[]
+      }
       slugify: { Args: { input: string }; Returns: string }
     }
     Enums: {

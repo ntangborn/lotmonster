@@ -67,7 +67,7 @@ export interface SORef {
   customer_email: string | null
   status: string
   shipped_at: string | null
-  recipe_id: string
+  recipe_id: string | null
   recipe_name: string
   qty: number
   unit: string
@@ -252,7 +252,7 @@ export async function traceForward(
 
 export interface ReverseLineTrace {
   line_id: string
-  recipe_id: string
+  recipe_id: string | null
   recipe_name: string
   qty: number
   unit: string
