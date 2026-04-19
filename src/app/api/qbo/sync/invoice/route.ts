@@ -149,16 +149,9 @@ export async function POST(request: NextRequest) {
       { status: 409 }
     )
   }
-  if (!org.qbo_default_item_id) {
-    return NextResponse.json(
-      {
-        error: 'default_item_not_set',
-        message:
-          'Configure a QBO default Item (e.g. "Sales") in Settings before posting invoices',
-      },
-      { status: 409 }
-    )
-  }
+  // Note: org.qbo_default_item_id is NOT hard-required anymore. It's
+  // only used as a fallback for SKUs that don't have their own
+  // qbo_item_id set. If every SKU has one, the org default can be null.
 
   const { data: so } = await admin
     .from('sales_orders')
@@ -193,17 +186,20 @@ export async function POST(request: NextRequest) {
 
   const { data: lines } = await admin
     .from('sales_order_lines')
-    .select('id, recipe_id, quantity, unit, unit_price, recipes(name)')
+    .select(
+      'id, recipe_id, sku_id, quantity, unit, unit_price, recipes(name), skus(name, qbo_item_id)'
+    )
     .eq('org_id', orgId)
     .eq('sales_order_id', sales_order_id)
     .order('created_at', { ascending: true })
 
-  type LineWithRecipe = (typeof lines extends Array<infer T> | null ? T : never) & {
+  type LineWithRefs = (typeof lines extends Array<infer T> | null ? T : never) & {
     recipes: { name: string } | null
+    skus: { name: string; qbo_item_id: string | null } | null
   }
   const billable = (lines ?? []).filter(
     (l) => Number(l.quantity) > 0 && l.unit_price != null && Number(l.unit_price) > 0
-  ) as LineWithRecipe[]
+  ) as LineWithRefs[]
 
   if (billable.length === 0) {
     return NextResponse.json(
@@ -212,6 +208,49 @@ export async function POST(request: NextRequest) {
         message:
           'Sales order has no lines with both quantity > 0 and unit_price > 0',
       },
+      { status: 409 }
+    )
+  }
+
+  // Per-line QBO Item resolution: sku.qbo_item_id ?? org.qbo_default_item_id.
+  // Fail fast (before posting to QBO) if any line has neither, naming the
+  // offending SKUs so the operator knows what to fix.
+  interface ResolvedLine {
+    line: LineWithRefs
+    itemRef: string
+    description: string
+  }
+  const resolved: ResolvedLine[] = []
+  const unmappable: string[] = []
+  for (const line of billable) {
+    const itemRef =
+      line.skus?.qbo_item_id?.trim() ||
+      org.qbo_default_item_id?.trim() ||
+      null
+    if (!itemRef) {
+      unmappable.push(
+        line.skus?.name ?? line.recipes?.name ?? `line ${line.id}`
+      )
+      continue
+    }
+    resolved.push({
+      line,
+      itemRef,
+      description:
+        line.skus?.name?.trim() ||
+        line.recipes?.name?.trim() ||
+        'Item',
+    })
+  }
+  if (unmappable.length > 0) {
+    const uniq = Array.from(new Set(unmappable))
+    const message =
+      `No QBO Item mapping for: ${uniq.join(', ')}. ` +
+      'Set sku.qbo_item_id on each SKU, or set a fallback ' +
+      'org.qbo_default_item_id in Settings.'
+    await markSyncLog(orgId, sales_order_id, 'failed', null, message.slice(0, 500))
+    return NextResponse.json(
+      { error: 'qbo_item_mapping_missing', message, skus: uniq },
       { status: 409 }
     )
   }
@@ -238,16 +277,15 @@ export async function POST(request: NextRequest) {
     DocNumber: so.order_number,
     PrivateNote: `Lotmonster sales order ${so.order_number}`,
     CustomerRef: { value: customerId },
-    Line: billable.map((line) => {
+    Line: resolved.map(({ line, itemRef, description }) => {
       const qty = Number(line.quantity)
       const price = Number(line.unit_price)
-      const recipeName = line.recipes?.name ?? 'Item'
       return {
         DetailType: 'SalesItemLineDetail',
         Amount: round2(qty * price),
-        Description: recipeName,
+        Description: description,
         SalesItemLineDetail: {
-          ItemRef: { value: org.qbo_default_item_id! },
+          ItemRef: { value: itemRef },
           Qty: qty,
           UnitPrice: round2(price),
         },
