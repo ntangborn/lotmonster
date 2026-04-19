@@ -13,15 +13,11 @@ import {
   CheckCircle2,
 } from 'lucide-react'
 
-export interface RecipeChoice {
-  id: string
-  name: string
-  yield_unit: string
-}
+import type { SellableSku } from '@/lib/sales-orders/queries'
 
 interface Line {
   uid: string
-  recipe_id: string
+  sku_id: string
   quantity: string
   unit: string
   unit_price: string
@@ -33,11 +29,18 @@ function newUid(): string {
 function blankLine(): Line {
   return {
     uid: newUid(),
-    recipe_id: '',
+    sku_id: '',
     quantity: '',
-    unit: 'unit',
+    unit: 'each',
     unit_price: '',
   }
+}
+function fmtNum(n: number, digits = 0): string {
+  if (!Number.isFinite(n)) return '—'
+  return n.toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: digits,
+  })
 }
 function fmtCost(n: number, digits = 2): string {
   if (!Number.isFinite(n)) return '—'
@@ -48,11 +51,11 @@ function fmtCost(n: number, digits = 2): string {
 }
 
 export function NewSOForm({
-  recipes,
+  skus,
   customers,
   suggestedOrderNumber,
 }: {
-  recipes: RecipeChoice[]
+  skus: SellableSku[]
   customers: string[]
   suggestedOrderNumber: string
 }) {
@@ -66,11 +69,11 @@ export function NewSOForm({
   const [submitting, setSubmitting] = useState(false)
   const [err, setErr] = useState('')
 
-  const recipeMap = useMemo(() => {
-    const m = new Map<string, RecipeChoice>()
-    for (const r of recipes) m.set(r.id, r)
+  const skuMap = useMemo(() => {
+    const m = new Map<string, SellableSku>()
+    for (const s of skus) m.set(s.id, s)
     return m
-  }, [recipes])
+  }, [skus])
 
   function updateLine(uid: string, patch: Partial<Line>) {
     setLines((prev) =>
@@ -83,11 +86,13 @@ export function NewSOForm({
   function removeLine(uid: string) {
     setLines((prev) => (prev.length === 1 ? prev : prev.filter((l) => l.uid !== uid)))
   }
-  function selectRecipe(uid: string, id: string) {
-    const r = recipeMap.get(id)
+  function selectSku(uid: string, id: string) {
+    const s = skuMap.get(id)
     updateLine(uid, {
-      recipe_id: id,
-      unit: r?.yield_unit?.trim() || 'unit',
+      sku_id: id,
+      unit: 'each',
+      unit_price:
+        s?.retail_price != null ? String(s.retail_price) : '',
     })
   }
 
@@ -100,13 +105,20 @@ export function NewSOForm({
 
   function validate(): string | null {
     if (!customerName.trim()) return 'Customer name is required'
-    const filled = lines.filter((l) => l.recipe_id && Number(l.quantity) > 0)
+    const filled = lines.filter((l) => l.sku_id && Number(l.quantity) > 0)
     if (filled.length === 0) {
-      return 'Add at least one line with a recipe and quantity'
+      return 'Add at least one line with a SKU and quantity'
     }
     for (const l of lines) {
-      if (l.recipe_id && !(Number(l.quantity) > 0)) {
+      if (l.sku_id && !(Number(l.quantity) > 0)) {
         return 'Each line must have a quantity > 0'
+      }
+      if (l.sku_id) {
+        const sku = skuMap.get(l.sku_id)
+        const need = Number(l.quantity) || 0
+        if (sku && need > sku.on_hand) {
+          return `${sku.name}: only ${sku.on_hand} on hand (need ${need})`
+        }
       }
     }
     return null
@@ -129,11 +141,11 @@ export function NewSOForm({
       notes: notes.trim() || null,
       confirm_now: confirm,
       lines: lines
-        .filter((l) => l.recipe_id && Number(l.quantity) > 0)
+        .filter((l) => l.sku_id && Number(l.quantity) > 0)
         .map((l) => ({
-          recipe_id: l.recipe_id,
+          sku_id: l.sku_id,
           quantity: Number(l.quantity),
-          unit: l.unit?.trim() || 'unit',
+          unit: l.unit?.trim() || 'each',
           unit_price:
             l.unit_price !== '' && Number(l.unit_price) >= 0
               ? Number(l.unit_price)
@@ -253,14 +265,15 @@ export function NewSOForm({
           </button>
         </div>
 
-        {recipes.length === 0 ? (
+        {skus.length === 0 ? (
           <p className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-300">
-            No recipes yet. Create one in{' '}
+            No sellable SKUs yet. A SKU must be active, unit-kind, and linked
+            to a recipe. Create one in{' '}
             <Link
-              href="/dashboard/recipes/new"
+              href="/dashboard/skus/new"
               className="underline hover:text-yellow-200"
             >
-              Recipes
+              SKUs
             </Link>{' '}
             before building a sales order.
           </p>
@@ -268,55 +281,86 @@ export function NewSOForm({
           <div className="space-y-2">
             {lines.map((l, idx) => {
               const total = lineTotals[idx]
+              const sku = l.sku_id ? skuMap.get(l.sku_id) : null
+              const need = Number(l.quantity) || 0
+              const short =
+                sku != null && need > 0 && need > sku.on_hand
               return (
                 <div
                   key={l.uid}
-                  className="flex items-start gap-2 rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2"
+                  className={`flex items-start gap-2 rounded-lg border px-3 py-2 ${
+                    short
+                      ? 'border-red-500/30 bg-red-500/5'
+                      : 'border-white/10 bg-white/[0.02]'
+                  }`}
                 >
-                  <div className="grid flex-1 gap-2 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1fr)]">
-                    <select
-                      value={l.recipe_id}
-                      onChange={(e) => selectRecipe(l.uid, e.target.value)}
-                      className={selectCls}
-                    >
-                      <option value="">Select a product…</option>
-                      {recipes.map((r) => (
-                        <option key={r.id} value={r.id}>
-                          {r.name}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      type="number"
-                      step="any"
-                      min="0"
-                      value={l.quantity}
-                      onChange={(e) =>
-                        updateLine(l.uid, { quantity: e.target.value })
-                      }
-                      placeholder="Qty"
-                      className={inputCls}
-                    />
-                    <input
-                      value={l.unit}
-                      onChange={(e) => updateLine(l.uid, { unit: e.target.value })}
-                      placeholder="unit"
-                      className={inputCls}
-                    />
-                    <input
-                      type="number"
-                      step="any"
-                      min="0"
-                      value={l.unit_price}
-                      onChange={(e) =>
-                        updateLine(l.uid, { unit_price: e.target.value })
-                      }
-                      placeholder="$/unit"
-                      className={inputCls}
-                    />
-                    <div className="flex items-center justify-end rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2 font-mono text-sm text-white/70">
-                      {total > 0 ? fmtCost(total) : '—'}
+                  <div className="flex-1 space-y-2">
+                    <div className="grid gap-2 sm:grid-cols-[minmax(0,2fr)_minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1fr)]">
+                      <select
+                        value={l.sku_id}
+                        onChange={(e) => selectSku(l.uid, e.target.value)}
+                        className={selectCls}
+                      >
+                        <option value="">Select a SKU…</option>
+                        {skus.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name} — {fmtNum(s.on_hand)} on hand
+                            {s.retail_price != null
+                              ? ` · ${fmtCost(s.retail_price)}`
+                              : ''}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        step="any"
+                        min="0"
+                        value={l.quantity}
+                        onChange={(e) =>
+                          updateLine(l.uid, { quantity: e.target.value })
+                        }
+                        placeholder="Qty"
+                        className={inputCls}
+                      />
+                      <input
+                        type="number"
+                        step="any"
+                        min="0"
+                        value={l.unit_price}
+                        onChange={(e) =>
+                          updateLine(l.uid, { unit_price: e.target.value })
+                        }
+                        placeholder="$/unit"
+                        className={inputCls}
+                      />
+                      <div className="flex items-center justify-end rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2 font-mono text-sm text-white/70">
+                        {total > 0 ? fmtCost(total) : '—'}
+                      </div>
                     </div>
+                    {sku && (
+                      <div className="flex flex-wrap items-center gap-3 text-xs">
+                        <span className="text-white/40">
+                          Fill:{' '}
+                          <span className="font-mono text-white/60">
+                            {sku.fill_quantity != null && sku.fill_unit
+                              ? `${sku.fill_quantity} ${sku.fill_unit}`
+                              : '—'}
+                          </span>
+                        </span>
+                        <span
+                          className={`font-mono ${
+                            short ? 'text-red-300' : 'text-white/50'
+                          }`}
+                        >
+                          On-hand: {fmtNum(sku.on_hand)}
+                          {short && (
+                            <span className="ml-1.5">
+                              · short {fmtNum(need - sku.on_hand)}
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                    )}
                   </div>
                   <button
                     type="button"

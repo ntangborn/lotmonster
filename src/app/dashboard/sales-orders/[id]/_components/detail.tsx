@@ -12,9 +12,6 @@ import {
   AlertCircle,
   Loader2,
   Trash2,
-  Plus,
-  X,
-  Sparkles,
   GitBranch,
 } from 'lucide-react'
 import type { SODetail } from '@/lib/sales-orders/queries'
@@ -349,7 +346,6 @@ export function SODetailView({ initial }: { initial: SODetail }) {
       {shipOpen && (
         <ShipModal
           soId={so.id}
-          lines={lines}
           onClose={() => setShipOpen(false)}
           onShipped={() => {
             setShipOpen(false)
@@ -361,33 +357,34 @@ export function SODetailView({ initial }: { initial: SODetail }) {
   )
 }
 
-interface ShipLineState {
-  uid: string
+interface ShipPreviewLine {
   line_id: string
-  product_name: string
-  quantity: number
-  unit: string
-  lots: string[]
-  pending: string
+  sku_id: string | null
+  sku_name: string
+  needed: number
+  available: number
+  shortage: number
+  ok: boolean
+  allocations: Array<{
+    lotId: string
+    lotNumber: string
+    quantityUsed: number
+    unitCost: number
+    expiryDate: string | null
+  }>
 }
 
-interface RunSuggestion {
-  run_id: string
-  run_number: string
-  status: string
-  actual_yield: number | null
-  yield_unit: string | null
-  completed_at: string | null
+interface ShipPreviewResponse {
+  all_ok: boolean
+  lines: ShipPreviewLine[]
 }
 
 function ShipModal({
   soId,
-  lines,
   onClose,
   onShipped,
 }: {
   soId: string
-  lines: SODetail['lines']
   onClose: () => void
   onShipped: () => void
 }) {
@@ -396,59 +393,28 @@ function ShipModal({
   const [notes, setNotes] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
-  const [suggestions, setSuggestions] = useState<Record<string, RunSuggestion[]>>({})
-  const [rows, setRows] = useState<ShipLineState[]>(() =>
-    lines.map((l) => ({
-      uid: l.id,
-      line_id: l.id,
-      product_name: l.recipe_name,
-      quantity: Number(l.quantity),
-      unit: l.unit,
-      lots: [...(l.lot_numbers_allocated ?? [])],
-      pending: '',
-    }))
-  )
+  const [preview, setPreview] = useState<ShipPreviewResponse | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(true)
 
   useEffect(() => {
-    fetch(`/api/sales-orders/${soId}/suggestions`)
+    let cancelled = false
+    setPreviewLoading(true)
+    fetch(`/api/sales-orders/${soId}/ship-preview`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (d?.suggestions) setSuggestions(d.suggestions)
+        if (cancelled) return
+        setPreview(d ?? { all_ok: false, lines: [] })
       })
-      .catch(() => {})
+      .catch(() => {
+        if (!cancelled) setErr('Could not load shipment preview')
+      })
+      .finally(() => {
+        if (!cancelled) setPreviewLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [soId])
-
-  function addSuggestion(uid: string, runNumber: string) {
-    setRows((prev) =>
-      prev.map((r) => {
-        if (r.uid !== uid) return r
-        if (r.lots.includes(runNumber)) return r
-        return { ...r, lots: [...r.lots, runNumber] }
-      })
-    )
-  }
-
-  function update(uid: string, patch: Partial<ShipLineState>) {
-    setRows((prev) => prev.map((r) => (r.uid === uid ? { ...r, ...patch } : r)))
-  }
-  function addLot(uid: string) {
-    setRows((prev) =>
-      prev.map((r) => {
-        if (r.uid !== uid) return r
-        const v = r.pending.trim()
-        if (!v) return r
-        if (r.lots.includes(v)) return { ...r, pending: '' }
-        return { ...r, lots: [...r.lots, v], pending: '' }
-      })
-    )
-  }
-  function removeLot(uid: string, lot: string) {
-    setRows((prev) =>
-      prev.map((r) =>
-        r.uid === uid ? { ...r, lots: r.lots.filter((l) => l !== lot) } : r
-      )
-    )
-  }
 
   async function submit() {
     setBusy(true)
@@ -457,7 +423,6 @@ function ShipModal({
       shipped_at: shippedDate
         ? new Date(shippedDate).toISOString()
         : undefined,
-      lines: rows.map((r) => ({ line_id: r.line_id, lot_numbers: r.lots })),
       notes: notes.trim() || null,
     }
     const res = await fetch(`/api/sales-orders/${soId}/ship`, {
@@ -477,23 +442,25 @@ function ShipModal({
   const inputCls =
     'w-full rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-white placeholder:text-white/30 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500'
 
+  const canSubmit =
+    !busy && !previewLoading && preview != null && preview.all_ok
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-4 pt-10"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-2xl rounded-2xl border border-white/10 bg-[#0D1B2A] p-6"
+        className="w-full max-w-3xl rounded-2xl border border-white/10 bg-[#0D1B2A] p-6"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-center gap-2">
+        <div className="mb-1 flex items-center gap-2">
           <Truck size={18} className="text-yellow-400" />
           <h3 className="text-lg font-semibold text-white">Ship Order</h3>
         </div>
         <p className="mb-4 text-xs text-white/50">
-          Record which lot numbers were used to fulfill each line for forward
-          traceability. Add the production-run number or finished-good lot # for
-          each batch shipped.
+          Server runs FEFO against finished-goods lots per line. Allocated
+          lot numbers are recorded automatically.
         </p>
 
         {err && (
@@ -503,7 +470,7 @@ function ShipModal({
           </div>
         )}
 
-        <div className="mb-3 grid gap-3 sm:grid-cols-2">
+        <div className="mb-4 grid gap-3 sm:grid-cols-2">
           <label className="block">
             <span className="mb-1 block text-xs font-medium text-white/50">
               Shipped date
@@ -528,104 +495,38 @@ function ShipModal({
           </label>
         </div>
 
-        <div className="space-y-3">
-          {rows.map((r) => (
-            <div
-              key={r.uid}
-              className="rounded-lg border border-white/10 bg-white/[0.02] p-3"
-            >
-              <div className="mb-2 flex items-center justify-between">
-                <span className="text-sm font-medium text-white">
-                  {r.product_name}
-                </span>
-                <span className="text-xs text-white/50">
-                  Qty: <span className="font-mono">{r.quantity} {r.unit}</span>
-                </span>
-              </div>
-
-              <div className="mb-2 flex flex-wrap gap-1.5">
-                {r.lots.length === 0 ? (
-                  <span className="text-xs text-white/30">No lots added</span>
-                ) : (
-                  r.lots.map((l) => (
-                    <span
-                      key={l}
-                      className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-xs text-white/80"
-                    >
-                      {l}
-                      <button
-                        onClick={() => removeLot(r.uid, l)}
-                        className="text-white/40 hover:text-red-300"
-                        aria-label={`Remove ${l}`}
-                      >
-                        <X size={11} />
-                      </button>
-                    </span>
-                  ))
-                )}
-              </div>
-
-              {(suggestions[r.line_id]?.length ?? 0) > 0 && (
-                <div className="mb-2 rounded border border-teal-500/20 bg-teal-500/[0.04] p-2">
-                  <div className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wider text-teal-300">
-                    <Sparkles size={10} />
-                    Suggested runs (FEFO-allocated)
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    {suggestions[r.line_id].map((s) => {
-                      const already = r.lots.includes(s.run_number)
-                      return (
-                        <button
-                          key={s.run_id}
-                          type="button"
-                          disabled={already}
-                          onClick={() => addSuggestion(r.uid, s.run_number)}
-                          className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[11px] transition-colors ${
-                            already
-                              ? 'border-white/10 bg-white/5 text-white/30'
-                              : 'border-teal-500/30 bg-teal-500/10 text-teal-200 hover:bg-teal-500/20'
-                          }`}
-                          title={
-                            s.actual_yield != null
-                              ? `${s.actual_yield} ${s.yield_unit ?? ''} · ${s.status}`
-                              : s.status
-                          }
-                        >
-                          {already ? '✓' : <Plus size={9} />}
-                          {s.run_number}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-
-              <div className="flex gap-2">
-                <input
-                  value={r.pending}
-                  onChange={(e) => update(r.uid, { pending: e.target.value })}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      addLot(r.uid)
-                    }
-                  }}
-                  placeholder="Or add custom lot # (e.g. HOT-20260415-001)"
-                  className={`${inputCls} font-mono`}
-                />
-                <button
-                  type="button"
-                  onClick={() => addLot(r.uid)}
-                  disabled={!r.pending.trim()}
-                  className="flex shrink-0 items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-white/80 hover:bg-white/10 disabled:opacity-40"
-                >
-                  <Plus size={12} />
-                  Add
-                </button>
-              </div>
-            </div>
-          ))}
+        <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/50">
+          FEFO allocation preview
         </div>
+
+        {previewLoading ? (
+          <div className="rounded-lg border border-white/10 bg-white/[0.02] px-4 py-6 text-center text-sm text-white/50">
+            <Loader2 size={14} className="mr-2 inline animate-spin" />
+            Computing allocation…
+          </div>
+        ) : !preview || preview.lines.length === 0 ? (
+          <div className="rounded-lg border border-white/10 bg-white/[0.02] px-4 py-6 text-center text-sm text-white/40">
+            No lines on this order.
+          </div>
+        ) : (
+          <>
+            {!preview.all_ok && (
+              <div className="mb-3 flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+                <AlertCircle size={14} className="mt-0.5 shrink-0" />
+                <span>
+                  One or more lines can&apos;t be fully shipped — finished-goods
+                  stock is short. Receive / produce more before shipping, or
+                  reduce quantities on the order.
+                </span>
+              </div>
+            )}
+            <div className="space-y-2">
+              {preview.lines.map((l) => (
+                <ShipLineRow key={l.line_id} line={l} />
+              ))}
+            </div>
+          </>
+        )}
 
         <div className="mt-5 flex justify-end gap-2">
           <button
@@ -637,7 +538,12 @@ function ShipModal({
           </button>
           <button
             onClick={submit}
-            disabled={busy}
+            disabled={!canSubmit}
+            title={
+              preview != null && !preview.all_ok
+                ? 'Cannot ship — one or more lines are short'
+                : undefined
+            }
             className="flex items-center gap-2 rounded-lg bg-yellow-500 px-4 py-2 text-sm font-semibold text-black hover:bg-yellow-400 disabled:opacity-50"
           >
             {busy && <Loader2 size={14} className="animate-spin" />}
@@ -645,6 +551,69 @@ function ShipModal({
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+function ShipLineRow({ line }: { line: ShipPreviewLine }) {
+  return (
+    <div
+      className={`rounded-lg border px-3 py-2.5 ${
+        line.ok
+          ? 'border-white/10 bg-white/[0.02]'
+          : 'border-red-500/30 bg-red-500/5'
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-white">
+            {line.sku_name}
+          </div>
+          <div className="mt-0.5 text-xs text-white/50">
+            Need:{' '}
+            <span className="font-mono text-white/80">
+              {fmtNum(line.needed, 4)}
+            </span>
+            {' · '}
+            Available:{' '}
+            <span
+              className={`font-mono ${
+                line.ok ? 'text-emerald-300' : 'text-red-300'
+              }`}
+            >
+              {fmtNum(line.available, 4)}
+            </span>
+            {!line.ok && (
+              <span className="ml-2 text-red-300">
+                short by {fmtNum(line.shortage, 4)}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+      {line.ok && line.allocations.length > 0 && (
+        <div className="mt-2 space-y-0.5 border-t border-white/5 pt-2">
+          {line.allocations.map((a) => (
+            <div
+              key={a.lotId}
+              className="flex items-center justify-between text-xs"
+            >
+              <span className="font-mono text-white/60">{a.lotNumber}</span>
+              <span className="text-white/50">
+                {a.expiryDate
+                  ? `exp ${new Date(a.expiryDate).toLocaleDateString()}`
+                  : 'no expiry'}
+              </span>
+              <span className="font-mono text-white/70">
+                {fmtNum(a.quantityUsed, 4)}
+              </span>
+              <span className="font-mono text-white/60">
+                {fmtCost(a.unitCost, 4)}/unit
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

@@ -10,9 +10,9 @@ export type SOStatus =
   | 'cancelled'
 
 export const soLineSchema = z.object({
-  recipe_id: z.uuid('Invalid recipe'),
+  sku_id: z.uuid('Invalid sku'),
   quantity: z.number().positive('Quantity must be greater than 0'),
-  unit: z.string().trim().min(1).max(50).default('unit'),
+  unit: z.string().trim().min(1).max(50).default('each'),
   unit_price: z
     .number()
     .nonnegative('Unit price must be 0 or greater')

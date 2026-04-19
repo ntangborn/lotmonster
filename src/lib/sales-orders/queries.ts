@@ -12,6 +12,7 @@ export interface SOListItem extends SORow {
 
 export interface SOLineWithRecipe extends SOLineRow {
   recipe_name: string
+  sku_name: string | null
   line_total: number
 }
 
@@ -123,7 +124,7 @@ export async function getSODetail(
 
   const { data: lines } = await admin
     .from('sales_order_lines')
-    .select('*, recipes(name)')
+    .select('*, recipes(name), skus(name)')
     .eq('org_id', orgId)
     .eq('sales_order_id', id)
     .order('created_at', { ascending: true })
@@ -134,6 +135,9 @@ export async function getSODetail(
     const recipe = (
       l as unknown as { recipes: { name: string } | null }
     ).recipes
+    const sku = (
+      l as unknown as { skus: { name: string } | null }
+    ).skus
     const lineTotal = Number(l.quantity) * Number(l.unit_price ?? 0)
     computed += lineTotal
     for (const ln of (l.lot_numbers_allocated ?? []) as string[]) {
@@ -142,6 +146,7 @@ export async function getSODetail(
     return {
       ...(l as SOLineRow),
       recipe_name: recipe?.name ?? 'Unknown',
+      sku_name: sku?.name ?? null,
       line_total: lineTotal,
     }
   })
@@ -152,4 +157,69 @@ export async function getSODetail(
     computed_total: computed,
     allocated_lot_numbers: Array.from(lotSet).sort(),
   }
+}
+
+export interface SellableSku {
+  id: string
+  name: string
+  recipe_id: string
+  fill_quantity: number | null
+  fill_unit: string | null
+  retail_price: number | null
+  on_hand: number
+}
+
+/**
+ * Active unit-kind SKUs that can be added to a sales order line.
+ * Requires a linked recipe_id because sales_order_lines.recipe_id is
+ * still NOT NULL (migration 008 will relax it). Includes on-hand
+ * quantity aggregated from available finished-goods lots.
+ */
+export async function listSellableSkus(
+  orgId: string
+): Promise<SellableSku[]> {
+  const admin = createAdminClient()
+
+  const { data: skus } = await admin
+    .from('skus')
+    .select(
+      'id, name, recipe_id, fill_quantity, fill_unit, retail_price'
+    )
+    .eq('org_id', orgId)
+    .eq('kind', 'unit')
+    .eq('active', true)
+    .not('recipe_id', 'is', null)
+    .order('name', { ascending: true })
+
+  const rows = skus ?? []
+  if (rows.length === 0) return []
+
+  const ids = rows.map((s) => s.id)
+  const { data: lots } = await admin
+    .from('lots')
+    .select('sku_id, quantity_remaining')
+    .eq('org_id', orgId)
+    .eq('status', 'available')
+    .in('sku_id', ids)
+
+  const onHand = new Map<string, number>()
+  for (const l of lots ?? []) {
+    if (!l.sku_id) continue
+    onHand.set(
+      l.sku_id,
+      (onHand.get(l.sku_id) ?? 0) + (Number(l.quantity_remaining) || 0)
+    )
+  }
+
+  return rows.map((s) => ({
+    id: s.id,
+    name: s.name,
+    recipe_id: s.recipe_id as string,
+    fill_quantity:
+      s.fill_quantity != null ? Number(s.fill_quantity) : null,
+    fill_unit: s.fill_unit,
+    retail_price:
+      s.retail_price != null ? Number(s.retail_price) : null,
+    on_hand: onHand.get(s.id) ?? 0,
+  }))
 }

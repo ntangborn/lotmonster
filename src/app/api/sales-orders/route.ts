@@ -57,14 +57,44 @@ export async function POST(request: NextRequest) {
   const input = parsed.data
   const admin = createAdminClient()
 
-  const recipeIds = Array.from(new Set(input.lines.map((l) => l.recipe_id)))
-  const { data: validRecipes } = await admin
-    .from('recipes')
-    .select('id')
+  const skuIds = Array.from(new Set(input.lines.map((l) => l.sku_id)))
+  const { data: validSkus } = await admin
+    .from('skus')
+    .select('id, recipe_id, kind, active')
     .eq('org_id', orgId)
-    .in('id', recipeIds)
-  if ((validRecipes?.length ?? 0) !== recipeIds.length) {
-    return NextResponse.json({ error: 'invalid_recipe' }, { status: 400 })
+    .in('id', skuIds)
+
+  if ((validSkus?.length ?? 0) !== skuIds.length) {
+    return NextResponse.json({ error: 'invalid_sku' }, { status: 400 })
+  }
+  const skuById = new Map(
+    (validSkus ?? []).map((s) => [s.id, s] as const)
+  )
+  for (const s of validSkus ?? []) {
+    if (s.kind !== 'unit') {
+      return NextResponse.json(
+        {
+          error:
+            'only unit-kind SKUs can be sold today (case / pallet land in phase 2)',
+        },
+        { status: 400 }
+      )
+    }
+    if (!s.active) {
+      return NextResponse.json(
+        { error: 'cannot sell an inactive SKU' },
+        { status: 400 }
+      )
+    }
+    if (!s.recipe_id) {
+      return NextResponse.json(
+        {
+          error:
+            'this SKU has no linked recipe — link one via /dashboard/skus first',
+        },
+        { status: 400 }
+      )
+    }
   }
 
   const orderNumber =
@@ -92,14 +122,20 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  const linePayload = input.lines.map((l) => ({
-    org_id: orgId,
-    sales_order_id: so.id,
-    recipe_id: l.recipe_id,
-    quantity: l.quantity,
-    unit: l.unit?.trim() || 'unit',
-    unit_price: l.unit_price ?? null,
-  }))
+  const linePayload = input.lines.map((l) => {
+    const sku = skuById.get(l.sku_id)
+    return {
+      org_id: orgId,
+      sales_order_id: so.id,
+      sku_id: l.sku_id,
+      // recipe_id is still NOT NULL on the DB (migration 008 will relax);
+      // derive it from the linked SKU so we stay schema-compliant.
+      recipe_id: sku?.recipe_id as string,
+      quantity: l.quantity,
+      unit: l.unit?.trim() || 'each',
+      unit_price: l.unit_price ?? null,
+    }
+  })
 
   const { error: linesError } = await admin
     .from('sales_order_lines')
