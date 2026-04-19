@@ -3,16 +3,25 @@
  * and sales orders. Critical for food-safety recalls and customer
  * audits.
  *
- * Forward (LOT → CUSTOMER):
- *   Given an ingredient lot number, find every production run that
- *   consumed it, then every sales order whose lot_numbers_allocated
- *   includes any of those runs (or the lot itself).
+ * Lots are polymorphic (post migration 007): a lot is either RAW
+ * (ingredient_id set) or FINISHED-GOODS (sku_id + production_run_id
+ * set). The forward/reverse/run traces all handle both.
  *
- * Reverse (CUSTOMER → SUPPLIER):
- *   Given a sales order, walk lot_numbers_allocated (which can hold
- *   either PR-* run numbers OR ingredient lot numbers) → resolve to
- *   production runs → resolve to consumed ingredient lots → resolve
- *   to suppliers (PO records).
+ * Forward (RAW or FINISHED lot → customer):
+ *   - raw lot → runs that consumed it → finished lots those runs produced
+ *     → sales orders that shipped those finished lots.
+ *   - finished lot → sales orders that shipped it.
+ *
+ * Reverse (customer → supplier):
+ *   SO line `lot_numbers_allocated` entries resolve to finished lots
+ *   (new system), or run numbers / raw lot numbers (legacy). For each
+ *   resolved finished lot we also walk to its production_run_id and
+ *   surface the raw lots that run consumed, so a recall from a
+ *   customer order follows the full chain back to suppliers.
+ *
+ * Run (middle-out):
+ *   run → consumed ingredient lots (raw + packaging) + produced
+ *   finished-goods lots + downstream sales orders.
  */
 
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -32,11 +41,20 @@ export interface RunRef {
 export interface LotRef {
   id: string
   lot_number: string
+  /** 'raw' = ingredient_id set; 'finished' = sku_id + production_run_id set. */
+  kind: 'raw' | 'finished'
+  // Raw-lot fields (null for finished).
   ingredient_id: string | null
   ingredient_name: string
   ingredient_sku: string | null
   supplier: string | null
   po_number: string | null
+  // Finished-goods fields (null for raw).
+  sku_id: string | null
+  sku_name: string | null
+  production_run_id: string | null
+  production_run_number: string | null
+  // Common.
   received_date: string | null
   expiry_date: string | null
   unit: string
@@ -53,18 +71,67 @@ export interface SORef {
   recipe_name: string
   qty: number
   unit: string
-  // The exact reference in lot_numbers_allocated that matched
+  // The exact reference in lot_numbers_allocated that matched.
   matched_via: string
 }
+
+interface LotJoinRow {
+  id: string
+  lot_number: string
+  ingredient_id: string | null
+  sku_id: string | null
+  production_run_id: string | null
+  unit: string
+  received_date: string | null
+  expiry_date: string | null
+  ingredients?: { name: string; sku: string | null } | null
+  skus?: { name: string } | null
+  purchase_orders?: { po_number: string; supplier: string } | null
+  production_runs?: { run_number: string } | null
+}
+
+function toLotRef(row: LotJoinRow): LotRef {
+  const kind: 'raw' | 'finished' = row.sku_id ? 'finished' : 'raw'
+  const ing = row.ingredients ?? null
+  const sku = row.skus ?? null
+  const po = row.purchase_orders ?? null
+  const run = row.production_runs ?? null
+  return {
+    id: row.id,
+    lot_number: row.lot_number,
+    kind,
+    ingredient_id: row.ingredient_id,
+    ingredient_name: ing?.name ?? (kind === 'finished' ? '' : 'Unknown'),
+    ingredient_sku: ing?.sku ?? null,
+    supplier: po?.supplier ?? null,
+    po_number: po?.po_number ?? null,
+    sku_id: row.sku_id,
+    sku_name: sku?.name ?? null,
+    production_run_id: row.production_run_id,
+    production_run_number: run?.run_number ?? null,
+    received_date: row.received_date,
+    expiry_date: row.expiry_date,
+    unit: row.unit,
+  }
+}
+
+const LOT_SELECT =
+  'id, lot_number, ingredient_id, sku_id, production_run_id, unit, received_date, expiry_date, ' +
+  'ingredients(name, sku), skus(name), purchase_orders(po_number, supplier), production_runs(run_number)'
 
 // ─── Forward trace: lot → customer ───────────────────────────────────────────
 
 export interface ForwardTraceResult {
   query: string
   lot: LotRef | null
-  // Runs that consumed this lot
+  /** Raw-lot query: runs that consumed this raw lot. Empty for finished-lot query. */
   consumed_in_runs: Array<RunRef & { quantity_used: number; unit: string }>
-  // SO lines whose lot_numbers_allocated contains this lot OR a run that used this lot
+  /** Finished-goods lots downstream of this query.
+   *   - raw-lot query: finished lots produced by the runs that consumed it.
+   *   - finished-lot query: [this lot] itself (for UI continuity).
+   */
+  produced_finished_lots: LotRef[]
+  /** SOs whose lot_numbers_allocated contains the lot or any downstream ref. */
   shipped_in: SORef[]
 }
 
@@ -75,47 +142,48 @@ export async function traceForward(
   const admin = createAdminClient()
   const trimmed = lotNumber.trim()
 
-  const { data: lot } = await admin
+  const { data: lotRow } = await admin
     .from('lots')
-    .select(
-      'id, lot_number, ingredient_id, unit, received_date, expiry_date, po_id, ingredients(name, sku), purchase_orders(po_number, supplier)'
-    )
+    .select(LOT_SELECT)
     .eq('org_id', orgId)
     .eq('lot_number', trimmed)
     .maybeSingle()
 
-  if (!lot) {
+  if (!lotRow) {
     return {
       query: trimmed,
       lot: null,
       consumed_in_runs: [],
+      produced_finished_lots: [],
       shipped_in: [],
     }
   }
 
-  const ing = (lot as unknown as { ingredients: { name: string; sku: string | null } | null }).ingredients
-  const po = (lot as unknown as { purchase_orders: { po_number: string; supplier: string } | null }).purchase_orders
-  const lotRef: LotRef = {
-    id: lot.id,
-    lot_number: lot.lot_number,
-    ingredient_id: lot.ingredient_id,
-    ingredient_name: ing?.name ?? 'Unknown',
-    ingredient_sku: ing?.sku ?? null,
-    supplier: po?.supplier ?? null,
-    po_number: po?.po_number ?? null,
-    received_date: lot.received_date,
-    expiry_date: lot.expiry_date,
-    unit: lot.unit,
+  const lotRef = toLotRef(lotRow as unknown as LotJoinRow)
+
+  // Finished-lot query: forward chain = this lot → SOs.
+  if (lotRef.kind === 'finished') {
+    const refs = new Set<string>([lotRef.lot_number])
+    // Legacy bridge: some SOs may have the run number in lot_numbers_allocated.
+    if (lotRef.production_run_number) refs.add(lotRef.production_run_number)
+    const shipped = await findSOLinesContainingAny(orgId, Array.from(refs))
+    return {
+      query: trimmed,
+      lot: lotRef,
+      consumed_in_runs: [],
+      produced_finished_lots: [lotRef],
+      shipped_in: shipped,
+    }
   }
 
-  // Runs that consumed this lot
+  // Raw-lot query: find runs that consumed it.
   const { data: runLots } = await admin
     .from('production_run_lots')
     .select(
       'production_run_id, quantity_used, unit, production_runs(id, run_number, status, recipe_id, started_at, completed_at, recipes(name))'
     )
     .eq('org_id', orgId)
-    .eq('lot_id', lot.id)
+    .eq('lot_id', lotRef.id)
 
   const runs: ForwardTraceResult['consumed_in_runs'] = (runLots ?? [])
     .map((r) => {
@@ -147,15 +215,35 @@ export async function traceForward(
     })
     .filter((r): r is NonNullable<typeof r> => r !== null)
 
-  // Build the search keys: this lot's number AND every run number that consumed it
-  const refs = new Set<string>([lotRef.lot_number, ...runs.map((r) => r.run_number)])
+  // For every run, find the finished-goods lots it produced.
+  let produced: LotRef[] = []
+  if (runs.length > 0) {
+    const runIds = runs.map((r) => r.id)
+    const { data: finished } = await admin
+      .from('lots')
+      .select(LOT_SELECT)
+      .eq('org_id', orgId)
+      .in('production_run_id', runIds)
+      .not('sku_id', 'is', null)
+    produced = (finished ?? []).map((row) =>
+      toLotRef(row as unknown as LotJoinRow)
+    )
+  }
 
+  // Build shipped-in search keys:
+  //   - this raw lot's number (pre-007 SOs might reference it)
+  //   - the run numbers that consumed it (legacy bridge)
+  //   - every finished lot number the runs produced (new system)
+  const refs = new Set<string>([lotRef.lot_number])
+  for (const r of runs) refs.add(r.run_number)
+  for (const p of produced) refs.add(p.lot_number)
   const shipped = await findSOLinesContainingAny(orgId, Array.from(refs))
 
   return {
     query: trimmed,
     lot: lotRef,
     consumed_in_runs: runs,
+    produced_finished_lots: produced,
     shipped_in: shipped,
   }
 }
@@ -168,12 +256,12 @@ export interface ReverseLineTrace {
   recipe_name: string
   qty: number
   unit: string
-  // Each lot_numbers_allocated entry, resolved to whatever it maps to
   refs: Array<{
     raw: string
     resolved_run: RunRef | null
     resolved_lot: LotRef | null
-    // If this ref matched a run, the ingredient lots that run consumed
+    /** If the ref matched a run (or a finished lot whose production_run_id resolves),
+     *  the raw ingredient lots that run consumed. */
     consumed_lots: LotRef[]
   }>
 }
@@ -190,7 +278,6 @@ export interface ReverseTraceResult {
     created_at: string
   } | null
   lines: ReverseLineTrace[]
-  // Aggregated unique sets across all lines (handy for the UI summary)
   all_runs: RunRef[]
   all_lots: LotRef[]
   all_suppliers: string[]
@@ -203,17 +290,20 @@ export async function traceReverse(
   const admin = createAdminClient()
   const q = orderNumberOrId.trim()
 
-  // Try by id first, then by order_number
   let { data: so } = await admin
     .from('sales_orders')
-    .select('id, order_number, customer_name, customer_email, status, shipped_at, created_at')
+    .select(
+      'id, order_number, customer_name, customer_email, status, shipped_at, created_at'
+    )
     .eq('org_id', orgId)
     .eq('id', q)
     .maybeSingle()
   if (!so) {
     const r = await admin
       .from('sales_orders')
-      .select('id, order_number, customer_name, customer_email, status, shipped_at, created_at')
+      .select(
+        'id, order_number, customer_name, customer_email, status, shipped_at, created_at'
+      )
       .eq('org_id', orgId)
       .eq('order_number', q)
       .maybeSingle()
@@ -240,7 +330,6 @@ export async function traceReverse(
     .eq('sales_order_id', so.id)
     .order('created_at', { ascending: true })
 
-  // Collect all unique refs across all lines for batched lookups
   const allRefs = new Set<string>()
   for (const l of lines ?? []) {
     for (const r of (l.lot_numbers_allocated ?? []) as string[]) {
@@ -281,72 +370,40 @@ export async function traceReverse(
 
     const { data: directLots } = await admin
       .from('lots')
-      .select(
-        'id, lot_number, ingredient_id, unit, received_date, expiry_date, ingredients(name, sku), purchase_orders(po_number, supplier)'
-      )
+      .select(LOT_SELECT)
       .eq('org_id', orgId)
       .in('lot_number', refList)
 
     for (const l of directLots ?? []) {
-      const ing = (
-        l as unknown as { ingredients: { name: string; sku: string | null } | null }
-      ).ingredients
-      const po = (
-        l as unknown as { purchase_orders: { po_number: string; supplier: string } | null }
-      ).purchase_orders
-      lotByNumber.set(l.lot_number, {
-        id: l.id,
-        lot_number: l.lot_number,
-        ingredient_id: l.ingredient_id,
-        ingredient_name: ing?.name ?? 'Unknown',
-        ingredient_sku: ing?.sku ?? null,
-        supplier: po?.supplier ?? null,
-        po_number: po?.po_number ?? null,
-        received_date: l.received_date,
-        expiry_date: l.expiry_date,
-        unit: l.unit,
-      })
+      const ref = toLotRef(l as unknown as LotJoinRow)
+      lotByNumber.set(ref.lot_number, ref)
     }
 
-    // For each matched run, look up the lots it consumed
-    if (runByNumber.size > 0) {
-      const runIds = Array.from(runByNumber.values()).map((r) => r.id)
+    // Run IDs we need upstream-consumption for = every run matched
+    // directly PLUS every finished lot's parent run.
+    const runIdsNeedingConsumption = new Set<string>()
+    for (const r of runByNumber.values()) runIdsNeedingConsumption.add(r.id)
+    for (const l of lotByNumber.values()) {
+      if (l.kind === 'finished' && l.production_run_id) {
+        runIdsNeedingConsumption.add(l.production_run_id)
+      }
+    }
+
+    if (runIdsNeedingConsumption.size > 0) {
       const { data: runLots } = await admin
         .from('production_run_lots')
         .select(
-          'production_run_id, lot_id, lots(id, lot_number, ingredient_id, unit, received_date, expiry_date, ingredients(name, sku), purchase_orders(po_number, supplier))'
+          `production_run_id, lot_id, lots(${LOT_SELECT})`
         )
         .eq('org_id', orgId)
-        .in('production_run_id', runIds)
+        .in('production_run_id', Array.from(runIdsNeedingConsumption))
 
       for (const rl of runLots ?? []) {
         const lot = (
-          rl as unknown as {
-            lots: {
-              id: string
-              lot_number: string
-              ingredient_id: string
-              unit: string
-              received_date: string | null
-              expiry_date: string | null
-              ingredients: { name: string; sku: string | null } | null
-              purchase_orders: { po_number: string; supplier: string } | null
-            } | null
-          }
+          rl as unknown as { lots: LotJoinRow | null }
         ).lots
         if (!lot) continue
-        const lotRef: LotRef = {
-          id: lot.id,
-          lot_number: lot.lot_number,
-          ingredient_id: lot.ingredient_id,
-          ingredient_name: lot.ingredients?.name ?? 'Unknown',
-          ingredient_sku: lot.ingredients?.sku ?? null,
-          supplier: lot.purchase_orders?.supplier ?? null,
-          po_number: lot.purchase_orders?.po_number ?? null,
-          received_date: lot.received_date,
-          expiry_date: lot.expiry_date,
-          unit: lot.unit,
-        }
+        const lotRef = toLotRef(lot)
         const arr = consumedByRun.get(rl.production_run_id) ?? []
         if (!arr.find((x) => x.id === lot.id)) arr.push(lotRef)
         consumedByRun.set(rl.production_run_id, arr)
@@ -362,8 +419,18 @@ export async function traceReverse(
       const t = raw.trim()
       const run = runByNumber.get(t) ?? null
       const lot = lotByNumber.get(t) ?? null
-      const consumed = run ? (consumedByRun.get(run.id) ?? []) : []
-      return { raw: t, resolved_run: run, resolved_lot: lot, consumed_lots: consumed }
+      let consumed: LotRef[] = []
+      if (run) {
+        consumed = consumedByRun.get(run.id) ?? []
+      } else if (lot?.kind === 'finished' && lot.production_run_id) {
+        consumed = consumedByRun.get(lot.production_run_id) ?? []
+      }
+      return {
+        raw: t,
+        resolved_run: run,
+        resolved_lot: lot,
+        consumed_lots: consumed,
+      }
     })
     return {
       line_id: l.id,
@@ -375,7 +442,6 @@ export async function traceReverse(
     }
   })
 
-  // Aggregated sets
   const runsSet = new Map<string, RunRef>()
   const lotsSet = new Map<string, LotRef>()
   const suppliersSet = new Set<string>()
@@ -384,7 +450,8 @@ export async function traceReverse(
       if (ref.resolved_run) runsSet.set(ref.resolved_run.id, ref.resolved_run)
       if (ref.resolved_lot) {
         lotsSet.set(ref.resolved_lot.id, ref.resolved_lot)
-        if (ref.resolved_lot.supplier) suppliersSet.add(ref.resolved_lot.supplier)
+        if (ref.resolved_lot.supplier)
+          suppliersSet.add(ref.resolved_lot.supplier)
       }
       for (const cl of ref.consumed_lots) {
         lotsSet.set(cl.id, cl)
@@ -403,12 +470,15 @@ export async function traceReverse(
   }
 }
 
-// ─── Run trace: search by run number ─────────────────────────────────────────
+// ─── Run trace: run → consumed + produced + downstream ───────────────────────
 
 export interface RunTraceResult {
   query: string
   run: RunRef | null
+  /** Lots consumed by the run (raw ingredients + packaging). */
   consumed_lots: Array<LotRef & { quantity_used: number; unit: string }>
+  /** Finished-goods lots this run produced. */
+  produced_finished_lots: LotRef[]
   shipped_in: SORef[]
 }
 
@@ -429,10 +499,17 @@ export async function traceRun(
     .maybeSingle()
 
   if (!run) {
-    return { query: q, run: null, consumed_lots: [], shipped_in: [] }
+    return {
+      query: q,
+      run: null,
+      consumed_lots: [],
+      produced_finished_lots: [],
+      shipped_in: [],
+    }
   }
 
-  const recipe = (run as unknown as { recipes: { name: string } | null }).recipes
+  const recipe = (run as unknown as { recipes: { name: string } | null })
+    .recipes
   const runRef: RunRef = {
     id: run.id,
     run_number: run.run_number,
@@ -446,48 +523,46 @@ export async function traceRun(
   const { data: rls } = await admin
     .from('production_run_lots')
     .select(
-      'lot_id, quantity_used, unit, lots(id, lot_number, ingredient_id, unit, received_date, expiry_date, ingredients(name, sku), purchase_orders(po_number, supplier))'
+      `lot_id, quantity_used, unit, lots(${LOT_SELECT})`
     )
     .eq('org_id', orgId)
     .eq('production_run_id', run.id)
 
   const consumed: RunTraceResult['consumed_lots'] = (rls ?? [])
     .map((rl) => {
-      const lot = (
-        rl as unknown as {
-          lots: {
-            id: string
-            lot_number: string
-            ingredient_id: string
-            unit: string
-            received_date: string | null
-            expiry_date: string | null
-            ingredients: { name: string; sku: string | null } | null
-            purchase_orders: { po_number: string; supplier: string } | null
-          } | null
-        }
-      ).lots
+      const lot = (rl as unknown as { lots: LotJoinRow | null }).lots
       if (!lot) return null
+      const ref = toLotRef(lot)
       return {
-        id: lot.id,
-        lot_number: lot.lot_number,
-        ingredient_id: lot.ingredient_id,
-        ingredient_name: lot.ingredients?.name ?? 'Unknown',
-        ingredient_sku: lot.ingredients?.sku ?? null,
-        supplier: lot.purchase_orders?.supplier ?? null,
-        po_number: lot.purchase_orders?.po_number ?? null,
-        received_date: lot.received_date,
-        expiry_date: lot.expiry_date,
-        unit: lot.unit,
+        ...ref,
         quantity_used: Number(rl.quantity_used) || 0,
       }
     })
     .filter((x): x is NonNullable<typeof x> => x !== null)
 
-  const refs = new Set<string>([runRef.run_number, ...consumed.map((c) => c.lot_number)])
+  const { data: finished } = await admin
+    .from('lots')
+    .select(LOT_SELECT)
+    .eq('org_id', orgId)
+    .eq('production_run_id', run.id)
+    .not('sku_id', 'is', null)
+
+  const produced: LotRef[] = (finished ?? []).map((row) =>
+    toLotRef(row as unknown as LotJoinRow)
+  )
+
+  const refs = new Set<string>([runRef.run_number])
+  for (const c of consumed) refs.add(c.lot_number)
+  for (const p of produced) refs.add(p.lot_number)
   const shipped = await findSOLinesContainingAny(orgId, Array.from(refs))
 
-  return { query: q, run: runRef, consumed_lots: consumed, shipped_in: shipped }
+  return {
+    query: q,
+    run: runRef,
+    consumed_lots: consumed,
+    produced_finished_lots: produced,
+    shipped_in: shipped,
+  }
 }
 
 // ─── Auto-suggest production runs to fulfill a sales order ───────────────────
@@ -510,7 +585,9 @@ export async function suggestRunsForOrderLine(
   const admin = createAdminClient()
   const { data } = await admin
     .from('production_runs')
-    .select('id, run_number, recipe_id, status, actual_yield, yield_unit, completed_at')
+    .select(
+      'id, run_number, recipe_id, status, actual_yield, yield_unit, completed_at'
+    )
     .eq('org_id', orgId)
     .eq('recipe_id', recipeId)
     .in('status', ['completed', 'in_progress'])
@@ -538,8 +615,6 @@ async function findSOLinesContainingAny(
   if (refs.length === 0) return []
   const admin = createAdminClient()
 
-  // Postgres: lot_numbers_allocated && array['ref1','ref2',...] tests overlap.
-  // Supabase JS PostgREST equivalent: .overlaps(). We must pass a TEXT[] literal.
   const arrayLiteral = `{${refs
     .map((r) => `"${r.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`)
     .join(',')}}`

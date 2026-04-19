@@ -193,12 +193,50 @@ function ForwardView({ result }: { result: ForwardTraceResult }) {
   if (!result.lot) {
     return <NotFound label={`No lot found with number "${result.query}"`} />
   }
+
+  // Finished-goods lot: short chain — just the lot and the SOs that shipped it.
+  if (result.lot.kind === 'finished') {
+    return (
+      <div className="space-y-4">
+        <Stage
+          icon={<Package size={14} />}
+          title="Source Lot (finished goods)"
+          accent="sky"
+          intro={`Trace forward from finished-goods lot ${result.lot.lot_number}.`}
+        >
+          <LotCard lot={result.lot} />
+        </Stage>
+
+        <FlowArrow />
+
+        <Stage
+          icon={<ShoppingBag size={14} />}
+          title={`Shipped to ${new Set(result.shipped_in.map((s) => s.id)).size} customer order${result.shipped_in.length === 1 ? '' : 's'}`}
+          accent="emerald"
+        >
+          {result.shipped_in.length === 0 ? (
+            <p className="text-xs text-white/40">
+              This finished lot hasn&apos;t been shipped on any sales order yet.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {result.shipped_in.map((s) => (
+                <SOCard key={`${s.id}-${s.matched_via}`} so={s} />
+              ))}
+            </div>
+          )}
+        </Stage>
+      </div>
+    )
+  }
+
+  // Raw-ingredient lot: full chain — raw → runs → finished goods → SOs.
   return (
     <div className="space-y-4">
       <Stage
         icon={<Package size={14} />}
-        title="Source Lot"
-        accent="teal"
+        title="Source Lot (raw)"
+        accent="emerald"
         intro={`Trace forward from ingredient lot ${result.lot.lot_number}.`}
       >
         <LotCard lot={result.lot} />
@@ -249,13 +287,34 @@ function ForwardView({ result }: { result: ForwardTraceResult }) {
       <FlowArrow />
 
       <Stage
+        icon={<Package size={14} />}
+        title={`Produced ${result.produced_finished_lots.length} finished-goods lot${result.produced_finished_lots.length === 1 ? '' : 's'}`}
+        accent="sky"
+      >
+        {result.produced_finished_lots.length === 0 ? (
+          <p className="text-xs text-white/40">
+            No finished-goods lots have been produced yet from the runs that
+            consumed this lot.
+          </p>
+        ) : (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {result.produced_finished_lots.map((fl) => (
+              <FinishedLotCard key={fl.id} lot={fl} />
+            ))}
+          </div>
+        )}
+      </Stage>
+
+      <FlowArrow />
+
+      <Stage
         icon={<ShoppingBag size={14} />}
         title={`Shipped to ${new Set(result.shipped_in.map((s) => s.id)).size} customer order${result.shipped_in.length === 1 ? '' : 's'}`}
         accent="emerald"
       >
         {result.shipped_in.length === 0 ? (
           <p className="text-xs text-white/40">
-            No sales orders reference this lot or its production runs.
+            No sales orders reference this lot or its downstream finished goods.
           </p>
         ) : (
           <div className="space-y-2">
@@ -265,6 +324,47 @@ function ForwardView({ result }: { result: ForwardTraceResult }) {
           </div>
         )}
       </Stage>
+    </div>
+  )
+}
+
+function FinishedLotCard({ lot }: { lot: ForwardTraceResult['lot'] }) {
+  if (!lot) return null
+  return (
+    <div className="rounded-lg border border-sky-500/30 bg-sky-500/[0.06] p-3 text-sm">
+      <div className="flex items-center justify-between">
+        <span className="font-mono text-white">{lot.lot_number}</span>
+        <span className="font-mono text-xs text-white/60">
+          {lot.unit}
+        </span>
+      </div>
+      <p className="mt-1 text-sky-200">
+        {lot.sku_id ? (
+          <Link
+            href={`/dashboard/skus/${lot.sku_id}`}
+            className="hover:text-sky-100"
+          >
+            {lot.sku_name ?? 'SKU'}
+          </Link>
+        ) : (
+          lot.sku_name ?? 'SKU'
+        )}
+      </p>
+      <div className="mt-1 text-[11px] text-white/40">
+        {lot.production_run_number && (
+          <span>
+            Run{' '}
+            <Link
+              href={`/dashboard/production-runs/${lot.production_run_id}`}
+              className="font-mono text-sky-300/80 hover:text-sky-200"
+            >
+              {lot.production_run_number}
+            </Link>
+            {' · '}
+          </span>
+        )}
+        Expiry {fmtDate(lot.expiry_date)}
+      </div>
     </div>
   )
 }
@@ -334,6 +434,27 @@ function RunView({ result }: { result: RunTraceResult }) {
                   </p>
                 )}
               </div>
+            ))}
+          </div>
+        )}
+      </Stage>
+
+      <FlowArrow direction="down" label="Produced" />
+
+      <Stage
+        icon={<Package size={14} />}
+        title={`${result.produced_finished_lots.length} finished-goods lot${result.produced_finished_lots.length === 1 ? '' : 's'} produced`}
+        accent="sky"
+      >
+        {result.produced_finished_lots.length === 0 ? (
+          <p className="text-xs text-white/40">
+            No finished-goods lots recorded for this run yet. They&apos;re
+            created when the run is completed via the multi-SKU dialog.
+          </p>
+        ) : (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {result.produced_finished_lots.map((fl) => (
+              <FinishedLotCard key={fl.id} lot={fl} />
             ))}
           </div>
         )}
@@ -507,6 +628,66 @@ function RefBlock({
     )
   }
   if (resolved_lot) {
+    // Finished-goods lot: show SKU name + upstream run + raw lots consumed.
+    if (resolved_lot.kind === 'finished') {
+      return (
+        <div className="text-xs">
+          <div className="flex items-center gap-1.5">
+            <ChevronRight size={11} className="text-white/30" />
+            <span className="font-mono text-white">
+              {resolved_lot.lot_number}
+            </span>
+            <span className="text-white/40">·</span>
+            {resolved_lot.sku_id ? (
+              <Link
+                href={`/dashboard/skus/${resolved_lot.sku_id}`}
+                className="text-sky-300 hover:text-sky-200"
+              >
+                {resolved_lot.sku_name ?? 'SKU'}
+              </Link>
+            ) : (
+              <span className="text-sky-300">
+                {resolved_lot.sku_name ?? 'SKU'}
+              </span>
+            )}
+            <span className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] font-medium text-sky-200">
+              Finished goods
+            </span>
+          </div>
+          {resolved_lot.production_run_number && resolved_lot.production_run_id && (
+            <div className="mt-1 ml-4 text-[11px] text-white/50">
+              produced by{' '}
+              <Link
+                href={`/dashboard/production-runs/${resolved_lot.production_run_id}`}
+                className="font-mono text-teal-300 hover:text-teal-200"
+              >
+                {resolved_lot.production_run_number}
+              </Link>
+            </div>
+          )}
+          {consumed_lots.length > 0 && (
+            <div className="mt-1.5 ml-4 space-y-0.5 border-l border-white/10 pl-3 text-[11px]">
+              {consumed_lots.map((l) => (
+                <div key={l.id} className="flex items-center gap-1.5">
+                  <ArrowRight size={9} className="text-white/30" />
+                  <span className="font-mono text-white/80">{l.lot_number}</span>
+                  <span className="text-white/40">·</span>
+                  <span className="text-white/60">{l.ingredient_name}</span>
+                  {l.supplier && (
+                    <>
+                      <span className="text-white/30">·</span>
+                      <span className="text-white/50">{l.supplier}</span>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )
+    }
+    // Raw ingredient lot (legacy bridge — some SOs still have raw lot#
+    // in lot_numbers_allocated).
     return (
       <div className="flex items-center gap-1.5 text-xs">
         <ChevronRight size={11} className="text-white/30" />
@@ -537,44 +718,94 @@ function RefBlock({
 
 function LotCard({ lot }: { lot: ForwardTraceResult['lot'] }) {
   if (!lot) return null
+
+  // Color + body differ by lot kind. Raw = green/teal, finished = blue.
+  const isFinished = lot.kind === 'finished'
+  const cardCls = isFinished
+    ? 'rounded-lg border border-sky-500/30 bg-sky-500/[0.06] p-3'
+    : 'rounded-lg border border-emerald-500/30 bg-emerald-500/[0.05] p-3'
+  const pillCls = isFinished
+    ? 'bg-sky-500/20 text-sky-200'
+    : 'bg-emerald-500/20 text-emerald-200'
+
   return (
-    <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3">
+    <div className={cardCls}>
       <div className="flex items-center justify-between">
         <span className="font-mono text-white">{lot.lot_number}</span>
-        <span className="text-xs text-white/40">{lot.unit}</span>
-      </div>
-      <p className="mt-1 text-sm text-white/80">
-        {lot.ingredient_id ? (
-          <Link
-            href={`/dashboard/ingredients/${lot.ingredient_id}`}
-            className="hover:text-teal-300"
-          >
-            {lot.ingredient_name}
-          </Link>
-        ) : (
-          <span>{lot.ingredient_name}</span>
-        )}
-        {lot.ingredient_sku && (
-          <span className="ml-1.5 text-xs text-white/40">
-            ({lot.ingredient_sku})
+        <span className="flex items-center gap-2">
+          <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${pillCls}`}>
+            {isFinished ? 'Finished goods' : 'Raw'}
           </span>
-        )}
-      </p>
-      <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-white/50">
-        {lot.supplier && (
-          <div>
-            Supplier: <span className="text-white/80">{lot.supplier}</span>
-          </div>
-        )}
-        {lot.po_number && (
-          <div>
-            PO:{' '}
-            <span className="font-mono text-white/80">{lot.po_number}</span>
-          </div>
-        )}
-        <div>Received: {fmtDate(lot.received_date)}</div>
-        <div>Expiry: {fmtDate(lot.expiry_date)}</div>
+          <span className="text-xs text-white/40">{lot.unit}</span>
+        </span>
       </div>
+
+      {isFinished ? (
+        <>
+          <p className="mt-1 text-sm text-white/80">
+            {lot.sku_id ? (
+              <Link
+                href={`/dashboard/skus/${lot.sku_id}`}
+                className="hover:text-sky-300"
+              >
+                {lot.sku_name ?? 'SKU'}
+              </Link>
+            ) : (
+              <span>{lot.sku_name ?? 'SKU'}</span>
+            )}
+          </p>
+          <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-white/50">
+            {lot.production_run_number && lot.production_run_id && (
+              <div>
+                Run:{' '}
+                <Link
+                  href={`/dashboard/production-runs/${lot.production_run_id}`}
+                  className="font-mono text-sky-300 hover:text-sky-200"
+                >
+                  {lot.production_run_number}
+                </Link>
+              </div>
+            )}
+            <div>Produced: {fmtDate(lot.received_date)}</div>
+            <div>Expiry: {fmtDate(lot.expiry_date)}</div>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="mt-1 text-sm text-white/80">
+            {lot.ingredient_id ? (
+              <Link
+                href={`/dashboard/ingredients/${lot.ingredient_id}`}
+                className="hover:text-emerald-300"
+              >
+                {lot.ingredient_name}
+              </Link>
+            ) : (
+              <span>{lot.ingredient_name}</span>
+            )}
+            {lot.ingredient_sku && (
+              <span className="ml-1.5 text-xs text-white/40">
+                ({lot.ingredient_sku})
+              </span>
+            )}
+          </p>
+          <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-white/50">
+            {lot.supplier && (
+              <div>
+                Supplier: <span className="text-white/80">{lot.supplier}</span>
+              </div>
+            )}
+            {lot.po_number && (
+              <div>
+                PO:{' '}
+                <span className="font-mono text-white/80">{lot.po_number}</span>
+              </div>
+            )}
+            <div>Received: {fmtDate(lot.received_date)}</div>
+            <div>Expiry: {fmtDate(lot.expiry_date)}</div>
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -625,12 +856,14 @@ const ACCENT_BORDER: Record<string, string> = {
   blue: 'border-blue-500/30 bg-blue-500/[0.04]',
   emerald: 'border-emerald-500/30 bg-emerald-500/[0.04]',
   purple: 'border-purple-500/30 bg-purple-500/[0.04]',
+  sky: 'border-sky-500/30 bg-sky-500/[0.04]',
 }
 const ACCENT_LABEL: Record<string, string> = {
   teal: 'text-teal-300',
   blue: 'text-blue-300',
   emerald: 'text-emerald-300',
   purple: 'text-purple-300',
+  sky: 'text-sky-300',
 }
 
 function Stage({
@@ -643,7 +876,7 @@ function Stage({
   icon: React.ReactNode
   title: string
   intro?: string
-  accent: 'teal' | 'blue' | 'emerald' | 'purple'
+  accent: 'teal' | 'blue' | 'emerald' | 'purple' | 'sky'
   children: React.ReactNode
 }) {
   return (
