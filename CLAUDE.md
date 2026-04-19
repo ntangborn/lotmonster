@@ -4,30 +4,46 @@
 
 ## Session Handoff — Start Here
 
-**Status as of 2026-04-18:** Part 9 (SKUs + finished-goods + packaging +
-multi-SKU completeRun) is **code-complete** and deployed to prod. User is
-about to start **Part 9.10 — Verify Multi-SKU Completion** (manual e2e
-test of the new flow on live data).
+**Status as of 2026-04-19:** Parts 9 + 10 are **code-complete and deployed
+to prod**. User is **pausing the build to acquire Perplexity + Vercel
+credits** before continuing. Next resumption work is Part 11 onward.
 
-**Before next code-writing session, the user plans to do substantial
-manual testing on:**
-1. The multi-SKU Complete-Run dialog (Part 9.10 in v4 guide)
-2. QBO end-to-end sync against sandbox company `Sandbox Company US 74a4`
-   / realm `9341456849762719` (Part 9B — never finished before we jumped
-   ahead to build SKUs)
+**What's live on prod (https://www.lotmonster.co):**
+- Full phase-1 SKU + finished-goods pipeline (migration 007 + 008):
+  new-SO form uses a SKU picker, ship modal runs server-side FEFO on
+  finished lots with a preview + shortfall warning, multi-SKU
+  Complete-Run dialog is live, traceability handles raw + finished
+  lots with distinct color coding.
+- QBO invoice sync uses per-SKU `qbo_item_id` with org default
+  fallback (fails fast with an unmappable-SKUs list if neither is
+  set).
+- **AI Assistant** (`/dashboard/ai`): streaming chat UI, 11 tool_use
+  functions backed by `execute_ai_query` Postgres wrapper with
+  `ai_readonly` role (migrations 009 + 010).
 
-**First thing to do next session:** ask the user what they found in
-testing. Expect a punch list of bugs / tweaks to fix before moving to
-Part 10 (AI assistant). Don't start new code paths until that list is
-cleared.
+**First thing to do next session:**
+1. Ask the user if the credits are sorted. If not, don't touch Vercel
+   Pro-requiring work (Part 11 cron) until they are.
+2. If they've been manually testing the AI assistant, ask what came
+   back. Expect a punch list of either prompt tuning or minor tool
+   tweaks.
+3. If tests pass, pick up at **Part 11** (Vercel cron dispatcher for
+   QBO sync). Vercel **Hobby plan is 1 cron/day**; **Pro is needed**
+   for the every-15-min cadence the plan specifies.
 
-**If testing passes cleanly**, the sequence after 9.10 is:
-1. Part 9B — QBO end-to-end (still outstanding — sandbox + journal-entry
-   / bill / invoice round-trips).
-2. Part 10 — AI assistant (`/dashboard/ai`) with Claude tool_use RPC
-   functions that read finished-goods + packaging state correctly.
-3. Parts 11–14 per `docs/lotmonster-build-guide-v4.md` (cron / Stripe /
-   polish / submission).
+**Remaining build sequence** (per `docs/lotmonster-build-guide-v4.md`
+and the revised plan at `docs/plans/2026-04-16-build-plan-revised-from-part-9.md`):
+- **Part 11:** `/api/cron/qbo-sync` dispatcher. Migration 011 adds
+  retry columns (`attempt_count`, `last_attempted_at`, `error_message`)
+  to `qbo_sync_log`. Requires Vercel Pro.
+- **Part 12:** Stripe billing (migration 012).
+- **Part 13:** Demo seeder + polish — including the `/dashboard/settings`
+  shell that fixes the QBO callback 404.
+- **Part 14:** Security audit + contest submission. Rotate the leaked
+  service-role key + Supabase access token *before* submitting.
+
+**Contest deadline: Jun 2, 2026 23:59 PT.** Submission portal:
+https://bdb.perplexityfund.ai/register. We have ~6 weeks buffer.
 
 **When the user reports a failure**, triage with:
 ```bash
@@ -35,26 +51,30 @@ vercel logs --no-follow --since 30m --level error --expand
 ```
 
 **Key facts for next session:**
-- Migration 007 (SKUs, `production_run_outputs`, `sku_packaging`,
-  polymorphic `lots`, `ingredients.kind`) is **applied to prod**.
-- The old `/dashboard/production-runs/[id]` "Complete" flow that took
-  a single yield number is **gone** — it now requires at least one
-  linked SKU with `fill_quantity` set before it can complete. An
-  in-progress run we ran during testing (500 bottles of Habanero Hot
-  Sauce, see below) is still sitting in limbo and can be completed now
-  via the new dialog.
+- Migrations through **010** are applied to prod: 007 (SKUs + finished
+  goods), 008 (`sales_order_lines.sku_id NOT NULL`, `recipe_id NULL`),
+  009 (11 SECURITY DEFINER AI functions), 010 (`ai_readonly` role +
+  `execute_ai_query` whitelist wrapper).
 - 123 unit tests pass (`npm run test`). Build is green on main.
-- Vercel auto-deploys from `main` work; don't `vercel --prod` from the
-  local Windows box (it builds a broken bundle — burned us once).
+- DB types were regenerated post-010 (`src/types/database.ts` now
+  includes `execute_ai_query` + the 11 `get_*` RPCs under Functions).
+- Vercel auto-deploys from `main` work; **do not `vercel --prod`** from
+  the local Windows box (it builds a broken bundle — burned us once).
 - `/dashboard/settings` still 404s (Part 13). QBO OAuth callback
-  redirects there, so test QBO flows knowing the final page-load will
-  fail — settled state lives in the DB regardless.
-- Contest deadline: **Jun 2, 2026 23:59 PT**. Submission portal:
-  https://bdb.perplexityfund.ai/register.
+  redirects there, so testing QBO still needs DB-side verification
+  after the redirect lands on the 404.
+- **Ghost Habanero run** from 2026-04-17 testing: marked `completed`
+  in the DB but has no `production_run_outputs` / finished lots
+  (pre-dated the `completeRun` rewrite). Not blocking; see Known
+  Issues for cleanup options.
+- Pre-existing **xlsx CVE** (prototype pollution + ReDoS) is flagged
+  by `npm audit`. No fix published upstream. Only used in the
+  onboarding Excel-parse path. Will need mitigation before submission
+  (swap to a maintained alternative or scope-limit the path).
 
 **Tools already configured:**
-- Vercel CLI globally installed, authed as `ntangborn-3191`, repo linked
-  (`.vercel/project.json` present)
+- Vercel CLI globally installed, authed as `ntangborn-3191`, repo
+  linked (`.vercel/project.json` present)
 - Supabase CLI linked to project `vvoyidhqlxjcuhhsdiyy`
 - All env vars synced between `.env.local` and Vercel production
 - Git auto-deploys on push to `main` (verified working; do not
@@ -163,9 +183,16 @@ curl -sk --ssl-no-revoke -X PATCH \
   Concurrent operations on the same lot can overdraft. Migrate to a
   Postgres rpc function when concurrency becomes real.
 - **Sales-order traceability**: `lot_numbers_allocated` is a free
-  TEXT[]; backward genealogy works via PR-numbers. A formal
-  `sales_order_lots` junction table would be cleaner long-term (phase 2
-  per the SKU plan).
+  TEXT[]; the new `shipSalesOrder` writes finished-lot numbers here,
+  and `traceReverse` resolves them → finished lot → parent run →
+  consumed raw lots. A formal `sales_order_lots` junction would
+  replace this bridge long-term (phase 2 per the SKU plan).
+- **`xlsx` high-severity CVE** (npm audit): prototype pollution +
+  ReDoS. No fix published upstream. Only imported from the
+  onboarding Excel-upload path (`src/app/api/ai/extract-ingredients`,
+  `src/app/dashboard/onboarding/upload`). Before Part 14 submission,
+  either swap to a maintained alternative (`xlsx-populate`,
+  `exceljs`) or scope-limit the feature.
 - **`production_runs.cost_per_unit` deprecated** for multi-SKU runs.
   It's `null` whenever a run has more than one output SKU — per-SKU
   unit-COGS lives on `production_run_outputs` + `lots.unit_cost` now.
@@ -228,6 +255,32 @@ curl -sk --ssl-no-revoke -X PATCH \
   migration 008). Inline DO-block backfill created one `kind='unit'`
   SKU per existing recipe and linked every historical SO line to its
   SKU, with row-count ASSERTs throughout.
+- Migration 008 (applied 2026-04-19): **SO-line SKU cutover**. Tightens
+  `sales_order_lines.sku_id` to NOT NULL and relaxes `recipe_id` to
+  NULL-able. Inline DO-block backfill patched 1 orphan row whose SKU
+  wasn't set (created on the old new-SO form path). ASSERTs abort the
+  txn if anything remains NULL after the backfill.
+- Migration 009 (applied 2026-04-19): **11 SECURITY DEFINER AI
+  functions** — `get_cogs_summary`, `get_expiring_lots`,
+  `get_low_stock_ingredients`, `get_ingredient_cost_history`,
+  `get_production_run_detail`, `get_recipe_cost_estimate`,
+  `get_sales_summary`, `get_lot_traceability`,
+  `get_inventory_valuation`, `get_supplier_spend`,
+  `get_finished_goods_status`. Every function takes `p_org_id uuid` as
+  its first parameter; the server ALWAYS injects the authenticated
+  session's orgId, never trusts a model-supplied one. All functions
+  are `STABLE`, `SET search_path = public, pg_temp`, and filter by
+  `org_id = p_org_id` on every query. REVOKE EXECUTE FROM PUBLIC.
+- Migration 010 (applied 2026-04-19): **ai_readonly NOLOGIN role +
+  execute_ai_query wrapper**. The role has USAGE on public, SELECT on
+  all current + future public tables, and EXECUTE on ONLY the 11
+  functions above. `public.execute_ai_query(function_name text,
+  params jsonb)` is a SECURITY DEFINER wrapper that validates
+  `params.org_id`, `SET LOCAL ROLE ai_readonly`, dispatches via a
+  hard-coded CASE (no `EXECUTE`, no `format()`, no dynamic SQL), and
+  `RESET ROLE`. Unknown function names raise `unknown_ai_function`
+  before any work happens. EXECUTE is GRANTed to service_role only —
+  authenticated users cannot invoke via PostgREST.
 
 ### Homepage + Dashboard
 - Placeholder homepage with Sign Up / Log In CTAs (`src/app/page.tsx`)
@@ -350,24 +403,60 @@ curl -sk --ssl-no-revoke -X PATCH \
 - API: full CRUD + `/status`, `/receive`
 
 ### Sales Orders (`/dashboard/sales-orders`)
-- List with status chips, /new with customer datalist autocomplete,
-  detail with state workflow (Draft → Confirm → Ship → Mark Delivered)
-- Ship modal: per-line lot # chip input + auto-suggested production runs
-  (FEFO-allocated) from `/api/sales-orders/[id]/suggestions`
+- List with status chips, /new with customer datalist autocomplete.
+- **New-SO form takes a SKU picker** (active unit SKUs with a linked
+  recipe) showing on-hand + retail price. Selecting a SKU auto-fills
+  `unit_price` from `retail_price`. Short-stock hint in red if
+  quantity > on_hand. Server API validates each `sku_id`, rejects
+  case/pallet + inactive + recipe-less SKUs, and derives `recipe_id`
+  from the SKU for legacy compatibility.
+- Detail page with state workflow (Draft → Confirm → Ship → Delivered).
+- **Ship modal** (`_components/detail.tsx`): the old free-text lot
+  chip input is gone. On open, GET `/api/sales-orders/[id]/ship-preview`
+  which calls `previewAllocation({ kind: 'sku', id: sku_id })` for
+  every line and returns `{ line_id, sku_name, needed, available,
+  shortage, ok, allocations[] }` + `all_ok`. Dialog shows a read-only
+  FEFO preview per line; Confirm Shipment is disabled while any line
+  is short. Submit posts only `{ shipped_at, notes }`.
+- `shipSalesOrder` rewritten 2026-04-19: server-side SKU FEFO on
+  finished lots. For each line: `allocateLots({ kind: 'sku', id:
+  line.sku_id }, line.quantity, orgId)` → decrement each allocated
+  lot (depleted flip at 0) → write allocated lot_numbers into
+  `sales_order_lines.lot_numbers_allocated` (TEXT[] bridge until
+  phase 2 replaces with a junction). On shortage throws
+  `InsufficientStockError` naming the SKU. Best-effort rollback:
+  `rollbackShip` clears lot_numbers_allocated on updated lines and
+  restores decremented lot quantities. SO flips to `shipped`, then
+  inserts a `qbo_sync_log` row.
 - Lot Traceability section (shipped/closed): de-duped flat list of
-  allocated lots with deep links
-- `shipSalesOrder` action inserts `qbo_sync_log` row (entity_type='invoice')
-- Auto SO number: `SO-{YYYY}-{NNN}`
-- API: full CRUD + `/status`, `/ship`, `/suggestions`
+  allocated lots with deep links.
+- Auto SO number: `SO-{YYYY}-{NNN}`.
+- API: full CRUD + `/status`, `/ship`, `/suggestions`, `/ship-preview`.
 
 ### Traceability (`/dashboard/traceability`)
-- Search by Lot / Run / Order, color-coded stages connected by flow arrows
+- **Polymorphic lots** (post-2026-04-19 rewrite). `LotRef` carries
+  `kind: 'raw' | 'finished'` plus `sku_id`, `sku_name`,
+  `production_run_id`, `production_run_number`. Centralized
+  `toLotRef(row)` helper + `LOT_SELECT` constant join-string.
 - `src/lib/traceability.ts`:
-  - `traceForward` (lot → runs → SOs)
-  - `traceReverse` (SO → runs → ingredient lots → suppliers)
-  - `traceRun` (middle-out)
+  - `traceForward`: raw-lot search → raw → runs → **produced_finished_lots
+    (new stage)** → SOs. Finished-lot search → finished lot → SOs
+    (short chain). Shipped-in search includes finished lot numbers,
+    legacy run numbers, and the raw lot number.
+  - `traceReverse`: SO → lot_numbers_allocated entries resolved to
+    finished lots, run numbers, or raw lots. Finished-lot matches
+    walk to parent `production_run_id` and surface the raw lots that
+    run consumed. Single batched query for all runs needing upstream
+    consumption.
+  - `traceRun`: adds `produced_finished_lots` to the result.
+- UI: raw lots render in emerald/green, finished lots in sky/blue,
+  with a "Raw" / "Finished goods" pill on `LotCard`. Added `sky`
+  accent to the Stage color map. Forward view gains a "Produced N
+  finished-goods lots" stage between Runs and Shipped. Run view gains
+  the same. `RefBlock` handles finished-lot references (SKU link +
+  upstream run + indented raw-lots consumed).
 - API: `GET /api/traceability?lot=|run=|order=`
-- "View Traceability" button on shipped SOs deep-links here
+- "View Traceability" button on shipped SOs deep-links here.
 
 ### COGS calculations (`src/lib/cogs.ts` + tests)
 - Pure helpers: `computeRunCOGS`, `computeRecipeEstimatedCOGS`,
@@ -396,6 +485,13 @@ curl -sk --ssl-no-revoke -X PATCH \
   - `POST /api/qbo/sync/invoice` — shipped SO → Invoice with
     SalesItemLineDetail, find-or-create Customer by name. Stores
     `sales_orders.qbo_invoice_id`, promotes status to 'invoiced'.
+    **Per-SKU item mapping (2026-04-19):** line `ItemRef.value` =
+    `sku.qbo_item_id ?? org.qbo_default_item_id`, line Description =
+    `sku.name ?? recipe.name`. Fail-fast: if any billable line has
+    neither a SKU-level nor org-level mapping, returns 409
+    `qbo_item_mapping_missing` with the offending SKU names and writes
+    the same message to `qbo_sync_log.error_message` — no QBO API
+    call is made.
   - `POST /api/qbo/sync/bill` — received PO → Bill with
     AccountBasedExpenseLineDetail (uses inventory account), find-or-
     create Vendor by name. Stores `purchase_orders.qbo_bill_id`.
@@ -414,6 +510,37 @@ curl -sk --ssl-no-revoke -X PATCH \
 ### AI Routes
 - `src/app/api/ai/extract-ingredients/route.ts` — Claude Vision for images/PDFs
 - `src/app/api/ai/onboarding-chat/route.ts` — streaming chat for Path C
+- `src/app/api/ai/query/route.ts` — **AI assistant dispatcher**.
+  Resolves `orgId` from session, opens a streaming Anthropic request
+  with `tools: AI_TOOLS` (claude-sonnet-4-6, no thinking param,
+  4096 max_tokens). Runs a tool loop up to 8 iterations: forwards
+  text deltas to the client as they arrive; when the turn ends in
+  `stop_reason='tool_use'`, calls `admin.rpc('execute_ai_query', {
+  p_function_name, p_params })` with `params.org_id` **always
+  overridden by the session orgId** (never trusts a model-supplied
+  value). Tool errors return `is_error: true` tool_result blocks so
+  Claude can explain/retry. Response stream is `text/plain;
+  charset=utf-8` with chunked transfer. No rate limiting yet — Part 12.
+
+### AI Assistant (`/dashboard/ai`)
+- `src/lib/ai/tools.ts` — 11 Anthropic tool_use schemas matching the
+  11 Postgres functions 1:1:
+  `get_cogs_summary`, `get_expiring_lots`, `get_low_stock_ingredients`,
+  `get_ingredient_cost_history`, `get_production_run_detail`,
+  `get_recipe_cost_estimate`, `get_sales_summary`,
+  `get_lot_traceability`, `get_inventory_valuation`,
+  `get_supplier_spend`, `get_finished_goods_status` (new). Every
+  `input_schema` has `additionalProperties: false` and **zero**
+  `org_id` fields — server-injected only.
+- `src/app/dashboard/ai/page.tsx` + `_components/chat.tsx` — full-height
+  chat UI. User bubbles right/teal, assistant bubbles left/gray,
+  markdown rendered via `react-markdown` + `remark-gfm` (tables,
+  bold, lists, code, links in teal). Three-dot pulse while waiting
+  for first stream byte. Red error bubble with Retry button that
+  re-runs from the last user message (no duplicate user bubble).
+  Empty state shows 5 suggested-question chips. Enter to send,
+  Shift+Enter for newline. AbortController wired for future cancel
+  support.
 
 ### Tests (123 passing, `npm run test`)
 - `src/lib/__tests__/units.test.ts` — unit conversions
@@ -512,35 +639,29 @@ Old guide → new plan map:
 
 Each item now has a home in the revised plan. Rough order of operations:
 
-- **Part 9.10 (NEXT — user testing):** End-to-end verification of the
-  multi-SKU Complete-Run flow on live data. Create a SKU with a
-  packaging BOM, start a run, complete via the new dialog, verify
-  finished lots + production_run_outputs land correctly and
-  /dashboard/skus/{id} shows the new on-hand.
+- **Manual testing (NEXT — while user acquires credits):** end-to-end
+  exercise of the AI Assistant on live data: ask about COGS splits,
+  expiring finished lots, finished-goods status, traceability for both
+  raw and finished lots, recipe cost estimates. Watch
+  `vercel logs --since 30m --level error` for tool errors.
 - **Part 9B (still outstanding):** QBO end-to-end verification using
   sandbox company `Sandbox Company US 74a4` (realm `9341456849762719`).
   Journal-entry, bill, and invoice round-trips. Account mappings are
   still direct-DB-insert (no UI yet — settings shell is Part 13).
-- **Part 10:** AI assistant (`/dashboard/ai` page + 10–11 Claude
-  tool_use RPC functions, several need to acknowledge finished goods +
-  packaging — e.g. "what's my finished-goods inventory?" now has real
-  data to query).
-- **Part 11:** `/api/cron/qbo-sync` dispatcher (Vercel cron on
-  every-15-min cadence — *requires Vercel Pro*; Hobby is 1/day).
-  Migration 011 for `qbo_sync_log` retry columns
+- **Part 11 (requires Vercel Pro):** `/api/cron/qbo-sync` dispatcher
+  on every-15-min cadence. Hobby plan is 1/day, insufficient.
+  Migration 011 adds `qbo_sync_log` retry columns
   (`attempt_count`, `last_attempted_at`, `error_message`).
 - **Part 12:** Stripe billing (migration 012).
 - **Part 13:** Demo seeder + polish, including the `/dashboard/settings`
-  shell that fixes the QBO callback 404.
-- **Part 14:** Security audit + contest submission (rotate the leaked
-  service-role key + Supabase access token *before* submission, not
-  after).
+  shell that fixes the QBO callback 404 AND gives operators a UI for
+  per-SKU QBO Item mappings (today those are direct-DB only).
+- **Part 14:** Security audit + contest submission. Must do BEFORE
+  submit: rotate leaked service-role key + Supabase access token,
+  address the xlsx CVE (either migrate off or scope-limit).
 
 Other existing TODOs not in the new plan (phase 2/3 backlog at the end
 of the revised plan):
-- Migration 008 — tighten `sales_order_lines.sku_id` to NOT NULL once
-  all app paths populate it. Keep `recipe_id` as a safety net through
-  one more deploy.
 - Recipe edit page (`/dashboard/recipes/[id]/edit`) — PATCH API works,
   needs UI
 - Real landing page
@@ -550,7 +671,11 @@ of the revised plan):
 - Case / pallet SKUs (`kind != 'unit'`) + `case_pack_events` + case
   pricing display toggle on invoices — phase 2 per the SKU plan.
 - `sales_order_line_lots` junction to replace the free-text
-  `lot_numbers_allocated` — also phase 2.
+  `lot_numbers_allocated` — also phase 2. Once it lands, the
+  `get_sales_summary` AI function can replace its weighted-avg COGS
+  proxy with authoritative per-line draw values.
+- Clean up the **ghost Habanero run** from 2026-04-17 testing (see
+  Known Issues).
 
 ## Recently resolved (2026-04-16 session)
 
@@ -669,3 +794,102 @@ During the same session the user ran 500 bottles of Habanero Hot Sauce
 through the OLD single-yield completeRun (before the rewrite shipped).
 The run is marked `completed` but has zero finished-goods lots. See
 Known Issues above for cleanup options.
+
+## Recently resolved (2026-04-19 session — Parts 9 tail + Part 10 AI)
+
+### Part 9 completion (SKU-picker flows + trace + QBO)
+- **/dashboard/production-runs/new** got a read-only "Yields into
+  these SKUs" preview panel that appears when a recipe is selected —
+  lists linked unit SKUs with an estimated bottle count at the current
+  batch multiplier. Fixes the "where do I attach SKUs?" discovery
+  problem without moving allocation away from Complete time.
+- **SKU detail** gained a Recipe selector in the Overview edit grid
+  so operators can retroactively link pre-existing SKUs (the ones
+  created before the new-SO form started filtering by
+  `recipe_id IS NOT NULL` silently dropped from the Complete dialog
+  because their `recipe_id` was null).
+- **`shipSalesOrder` rewrite** — server-side SKU FEFO. Dropped the
+  old `inputs: ShipLineInput[]` param; now takes `(orgId, soId,
+  shippedAt, notes)` and the server does all allocation, decrementing
+  finished lots and writing allocated lot_numbers to the
+  `lot_numbers_allocated` TEXT[] bridge.
+- **/dashboard/sales-orders/new** SKU picker (active unit SKUs with
+  a recipe) replaces the recipe dropdown. Shows on-hand + retail price
+  in the option label; auto-fills unit_price from retail_price; flags
+  short-stock lines red before submit. API derives `recipe_id` from
+  the chosen SKU for the not-yet-relaxed column (008 relaxed it later
+  in the same session).
+- **Ship modal** rebuilt around a new GET
+  `/api/sales-orders/[id]/ship-preview` endpoint that calls
+  `previewAllocation({kind:'sku', id:sku_id})` per line. Dialog
+  renders need/available/shortage per line; Confirm Shipment is
+  disabled while anything is short. All free-text chip UI is gone.
+- **QBO invoice sync** now uses `sku.qbo_item_id ?? org.qbo_default_item_id`
+  per line with `sku.name` as the description. Fail-fast returns 409
+  `qbo_item_mapping_missing` with the offending SKU names if any line
+  ends unmapped — no QBO API call happens.
+- **Traceability rewrite** — polymorphic `LotRef` (kind/raw+finished),
+  shared `toLotRef(row)` + `LOT_SELECT` constant. Forward trace for
+  raw lots now walks to produced finished-goods lots. Reverse trace
+  resolves finished-lot entries in `lot_numbers_allocated` and walks
+  to parent run → consumed raw. Run trace gains
+  `produced_finished_lots`. UI: emerald/green for raw, sky/blue for
+  finished, with a pill on every LotCard; new "Produced N finished-
+  goods lots" stages in forward + run views; RefBlock handles
+  finished-lot references with upstream + SKU links.
+- **Migration 008** (applied to prod): `sales_order_lines.sku_id SET
+  NOT NULL`, `recipe_id DROP NOT NULL`. Inline DO block backfilled
+  one orphan row (from the old code path) before the constraint flip.
+  ASSERTs abort the txn if anything remained NULL after the backfill.
+
+### Part 10 — AI Assistant built & shipped
+- **Migration 009** — 11 SECURITY DEFINER functions (`get_cogs_summary`
+  through `get_finished_goods_status`). Every function scoped by
+  `p_org_id uuid` (never trusted from JWT), `STABLE`, `SET search_path
+  = public, pg_temp`, `REVOKE EXECUTE FROM PUBLIC`. The new
+  `get_finished_goods_status` answers "what can I sell today?" with
+  on-hand + earliest expiry + weighted-avg unit cost + retail price
+  per active unit SKU.
+- **Migration 010** — `ai_readonly NOLOGIN` role with USAGE on public,
+  SELECT on all tables, EXECUTE on exactly the 11 functions.
+  `public.execute_ai_query(function_name, params)` wrapper is
+  SECURITY DEFINER, validates `params.org_id`, `SET LOCAL ROLE
+  ai_readonly`, dispatches via a hard-coded CASE (no `EXECUTE`, no
+  `format()`, no dynamic SQL), `RESET ROLE` on every exit path.
+  Unknown function name raises before any work happens. EXECUTE
+  granted only to `service_role` — PostgREST does not expose the
+  wrapper to the browser.
+- **`src/lib/ai/tools.ts`** — 11 Anthropic tool_use schemas
+  matching the DB functions 1:1. `additionalProperties: false` on
+  every schema; ZERO `org_id` fields (server-injected only). Exports
+  `AI_TOOLS`, `AI_TOOL_NAMES`, `AI_TOOLS_BY_NAME`.
+- **`/api/ai/query` dispatcher** — streaming POST route with a
+  tool-loop (up to 8 iterations). Uses `anthropic.messages.stream`
+  with claude-sonnet-4-6, max_tokens=4096, no thinking param.
+  Forwards text deltas straight to the client; on
+  `stop_reason='tool_use'` executes each block via `admin.rpc(
+  'execute_ai_query', { p_function_name, p_params })` with
+  `params.org_id` ALWAYS overridden by the session orgId. Tool
+  errors come back as `is_error: true` tool_result blocks so the
+  model can explain/retry.
+- **`/dashboard/ai` chat UI** — full-height chat. User bubbles right/
+  teal, assistant bubbles left/gray, markdown via `react-markdown` +
+  `remark-gfm` (tables, bold, lists, code, teal links). Three-dot
+  pulse while waiting for first byte. Red error bubble with Retry
+  (re-runs from last user message, no duplicate). Empty state shows
+  the 5 suggested-question chips (COGS split, expiring finished
+  goods, low packaging, 16oz availability, trace a finished lot).
+  New deps: `react-markdown`, `remark-gfm`.
+
+### Collateral
+- DB types (`src/types/database.ts`) regenerated post-migrations
+  008+009+010 — now exposes `execute_ai_query` + 11 `get_*` RPCs.
+  `sales_order_lines.recipe_id` is now `string | null` in the types;
+  null-guards added in `src/app/api/sales-orders/[id]/suggestions/route.ts`
+  and widened `ReverseLineTrace.recipe_id` + `SORef.recipe_id` in
+  `src/lib/traceability.ts`.
+
+### Pause for credits
+User paused to acquire Perplexity + Vercel credits before continuing
+to Part 11 (cron dispatcher needs Vercel Pro). When resuming, start
+by asking about AI assistant testing results (see handoff block above).
