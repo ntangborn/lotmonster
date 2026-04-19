@@ -20,6 +20,14 @@ export interface RecipeOption {
   target_yield_unit: string
 }
 
+export interface SkuHint {
+  id: string
+  name: string
+  fill_quantity: number | null
+  fill_unit: string | null
+  shelf_life_days: number | null
+}
+
 function fmtNum(n: number, digits = 2): string {
   if (!Number.isFinite(n)) return '—'
   return n.toLocaleString(undefined, {
@@ -37,9 +45,11 @@ function fmtCost(n: number, digits = 4): string {
 
 export function NewRunForm({
   recipes,
+  skusByRecipe,
   preselectedRecipe,
 }: {
   recipes: RecipeOption[]
+  skusByRecipe: Record<string, SkuHint[]>
   preselectedRecipe?: string
 }) {
   const router = useRouter()
@@ -243,6 +253,14 @@ export function NewRunForm({
         </section>
       )}
 
+      {recipeId && (
+        <YieldsPanel
+          recipe={recipes.find((r) => r.id === recipeId) ?? null}
+          multiplier={Number(multiplier) || 0}
+          skus={skusByRecipe[recipeId] ?? []}
+        />
+      )}
+
       <div className="flex items-center justify-end gap-3">
         <Link
           href="/dashboard/production-runs"
@@ -373,5 +391,141 @@ function Field({
       </span>
       {children}
     </label>
+  )
+}
+
+function YieldsPanel({
+  recipe,
+  multiplier,
+  skus,
+}: {
+  recipe: RecipeOption | null
+  multiplier: number
+  skus: SkuHint[]
+}) {
+  const expectedVolume =
+    recipe != null && multiplier > 0 ? recipe.target_yield * multiplier : 0
+
+  return (
+    <section className="mb-5 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-white/60">
+          Yields into these SKUs
+        </h2>
+        {recipe && expectedVolume > 0 && skus.length > 0 && (
+          <span className="text-xs text-white/50">
+            At ×{fmtNum(multiplier, 4)}, this batch fills:
+          </span>
+        )}
+      </div>
+
+      {skus.length === 0 ? (
+        <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-300">
+          <p className="font-medium">No SKUs linked to this recipe yet.</p>
+          <p className="mt-1 text-xs text-yellow-300/80">
+            You can still create / start the run, but you&apos;ll need a SKU
+            with a <span className="font-mono">fill_quantity</span> before you
+            can complete it.{' '}
+            <Link
+              href="/dashboard/skus/new"
+              className="underline hover:text-yellow-200"
+            >
+              Create a SKU
+            </Link>
+            .
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {skus.map((s) => (
+            <SkuEstimate
+              key={s.id}
+              sku={s}
+              expectedVolume={expectedVolume}
+              recipeYieldUnit={recipe?.target_yield_unit ?? null}
+            />
+          ))}
+        </div>
+      )}
+
+      <p className="mt-3 text-xs text-white/40">
+        SKU quantities are finalized when you complete the run. This lets you
+        decide the actual pack mix after cooking.
+      </p>
+    </section>
+  )
+}
+
+function SkuEstimate({
+  sku,
+  expectedVolume,
+  recipeYieldUnit,
+}: {
+  sku: SkuHint
+  expectedVolume: number
+  recipeYieldUnit: string | null
+}) {
+  const hasFillQty = sku.fill_quantity != null && sku.fill_quantity > 0
+  const unitMatch =
+    sku.fill_unit != null &&
+    recipeYieldUnit != null &&
+    sku.fill_unit === recipeYieldUnit
+  const canEstimate = hasFillQty && unitMatch && expectedVolume > 0
+  const estimate = canEstimate
+    ? Math.floor(expectedVolume / Number(sku.fill_quantity))
+    : null
+
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-2.5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="font-medium text-white">{sku.name}</div>
+          <div className="mt-0.5 text-xs text-white/50">
+            {hasFillQty && sku.fill_unit ? (
+              <>
+                fill{' '}
+                <span className="font-mono text-white/70">
+                  {fmtNum(Number(sku.fill_quantity))} {sku.fill_unit}
+                </span>
+              </>
+            ) : (
+              <span className="text-red-300">
+                no fill_quantity set —{' '}
+                <Link
+                  href={`/dashboard/skus/${sku.id}`}
+                  className="underline hover:text-red-200"
+                >
+                  configure
+                </Link>
+              </span>
+            )}
+            {sku.shelf_life_days != null && (
+              <>
+                {' · '}shelf life{' '}
+                <span className="font-mono text-white/70">
+                  {sku.shelf_life_days}d
+                </span>
+              </>
+            )}
+          </div>
+        </div>
+        <div className="shrink-0 text-right">
+          {estimate != null ? (
+            <span className="font-mono text-sm text-teal-300">
+              ~{fmtNum(estimate)} bottles
+            </span>
+          ) : hasFillQty && !unitMatch ? (
+            <span
+              className="font-mono text-sm text-white/40"
+              title={`Recipe yields in ${recipeYieldUnit ?? '?'}, SKU fills in ${sku.fill_unit ?? '?'}`}
+            >
+              —
+            </span>
+          ) : (
+            <span className="font-mono text-sm text-white/30">—</span>
+          )}
+        </div>
+      </div>
+    </div>
   )
 }
