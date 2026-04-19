@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { resolveOrgId } from '@/lib/ingredients/queries'
 import { shipSOSchema } from '@/lib/sales-orders/schema'
 import { shipSalesOrder, SOStateError } from '@/lib/sales-orders/actions'
+import { InsufficientStockError } from '@/lib/fefo'
 
 export async function POST(
   request: NextRequest,
@@ -36,13 +37,15 @@ export async function POST(
     await shipSalesOrder(
       orgId,
       id,
-      parsed.data.lines,
       parsed.data.shipped_at ?? null,
       parsed.data.notes ?? null
     )
     return NextResponse.json({ ok: true })
   } catch (e) {
     if (e instanceof SOStateError) {
+      return NextResponse.json({ error: e.message }, { status: 409 })
+    }
+    if (e instanceof InsufficientStockError) {
       return NextResponse.json({ error: e.message }, { status: 409 })
     }
     return NextResponse.json(
