@@ -18,6 +18,7 @@ import { UNITS } from '@/lib/ingredients/schema'
 interface Props {
   initial: SkuDetail
   packagingIngredients: Array<{ id: string; name: string; unit: string }>
+  recipes: Array<{ id: string; name: string }>
 }
 
 interface BomDraftRow {
@@ -46,7 +47,11 @@ function fmtDate(s: string | null): string {
   return new Date(s).toLocaleDateString()
 }
 
-export function SkuDetailView({ initial, packagingIngredients }: Props) {
+export function SkuDetailView({
+  initial,
+  packagingIngredients,
+  recipes,
+}: Props) {
   const router = useRouter()
   const [data, setData] = useState(initial)
   const [err, setErr] = useState('')
@@ -59,6 +64,7 @@ export function SkuDetailView({ initial, packagingIngredients }: Props) {
   const sku = data.sku
 
   const [name, setName] = useState(sku.name)
+  const [recipeId, setRecipeId] = useState<string>(sku.recipe_id ?? '')
   const [upc, setUpc] = useState(sku.upc ?? '')
   const [fillQty, setFillQty] = useState(
     sku.fill_quantity != null ? String(sku.fill_quantity) : ''
@@ -77,6 +83,7 @@ export function SkuDetailView({ initial, packagingIngredients }: Props) {
 
   function resetEdits() {
     setName(sku.name)
+    setRecipeId(sku.recipe_id ?? '')
     setUpc(sku.upc ?? '')
     setFillQty(sku.fill_quantity != null ? String(sku.fill_quantity) : '')
     setFillUnit(sku.fill_unit ?? 'fl_oz')
@@ -111,6 +118,7 @@ export function SkuDetailView({ initial, packagingIngredients }: Props) {
     setErr('')
     const body = {
       name: name.trim(),
+      recipe_id: recipeId || null,
       upc: upc.trim() || null,
       fill_quantity: toNumberOrNull(fillQty),
       fill_unit: fillQty.trim() ? fillUnit : null,
@@ -273,6 +281,20 @@ export function SkuDetailView({ initial, packagingIngredients }: Props) {
                     onChange={(e) => setName(e.target.value)}
                     className={inputCls}
                   />
+                </Field>
+                <Field label="Recipe">
+                  <select
+                    value={recipeId}
+                    onChange={(e) => setRecipeId(e.target.value)}
+                    className={`${inputCls} bg-[#0D1B2A]`}
+                  >
+                    <option value="">— no recipe (resale / merch) —</option>
+                    {recipes.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}
+                      </option>
+                    ))}
+                  </select>
                 </Field>
                 <Field label="UPC">
                   <input

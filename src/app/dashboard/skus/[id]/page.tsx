@@ -5,6 +5,7 @@ import { resolveOrgId } from '@/lib/ingredients/queries'
 import {
   getSkuDetail,
   listPackagingIngredients,
+  listRecipesForSelect,
 } from '@/lib/skus/queries'
 import { SkuDetailView } from './_components/detail'
 
@@ -22,9 +23,10 @@ export default async function SkuDetailPage({
     redirect('/login')
   }
 
-  const [detail, packagingIngredients] = await Promise.all([
+  const [detail, packagingIngredients, recipes] = await Promise.all([
     getSkuDetail(orgId, id),
     listPackagingIngredients(orgId),
+    listRecipesForSelect(orgId),
   ])
   if (!detail) notFound()
 
@@ -32,6 +34,7 @@ export default async function SkuDetailPage({
     <SkuDetailView
       initial={detail}
       packagingIngredients={packagingIngredients}
+      recipes={recipes}
     />
   )
 }
