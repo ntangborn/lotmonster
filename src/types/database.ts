@@ -609,11 +609,13 @@ export type Database = {
       }
       qbo_sync_log: {
         Row: {
+          attempt_count: number
           created_at: string
           entity_id: string
           entity_type: string
           error_message: string | null
           id: string
+          last_attempted_at: string | null
           org_id: string
           qbo_doc_id: string | null
           retry_count: number
@@ -621,11 +623,13 @@ export type Database = {
           synced_at: string | null
         }
         Insert: {
+          attempt_count?: number
           created_at?: string
           entity_id: string
           entity_type: string
           error_message?: string | null
           id?: string
+          last_attempted_at?: string | null
           org_id: string
           qbo_doc_id?: string | null
           retry_count?: number
@@ -633,11 +637,13 @@ export type Database = {
           synced_at?: string | null
         }
         Update: {
+          attempt_count?: number
           created_at?: string
           entity_id?: string
           entity_type?: string
           error_message?: string | null
           id?: string
+          last_attempted_at?: string | null
           org_id?: string
           qbo_doc_id?: string | null
           retry_count?: number
