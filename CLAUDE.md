@@ -36,7 +36,8 @@ and the revised plan at `docs/plans/2026-04-16-build-plan-revised-from-part-9.md
 - **Part 11:** `/api/cron/qbo-sync` dispatcher. Migration 011 adds
   retry columns (`attempt_count`, `last_attempted_at`, `error_message`)
   to `qbo_sync_log`. Requires Vercel Pro.
-- **Part 12:** Stripe billing (migration 012).
+- **Part 12:** Stripe billing (migration 013 — bumped by the hotfix
+  renumber).
 - **Part 13:** Demo seeder + polish — including the `/dashboard/settings`
   shell that fixes the QBO callback 404.
 - **Part 14:** Security audit + contest submission. Rotate the leaked
@@ -51,13 +52,15 @@ vercel logs --no-follow --since 30m --level error --expand
 ```
 
 **Key facts for next session:**
-- Migrations through **010** are applied to prod: 007 (SKUs + finished
+- Migrations through **012** are applied to prod: 007 (SKUs + finished
   goods), 008 (`sales_order_lines.sku_id NOT NULL`, `recipe_id NULL`),
   009 (11 SECURITY DEFINER AI functions), 010 (`ai_readonly` role +
-  `execute_ai_query` whitelist wrapper).
+  `execute_ai_query` whitelist wrapper), 011 (AI wrapper hotfix — drop
+  the `SET ROLE` that PG 15+ disallows inside SECURITY DEFINER), 012
+  (`qbo_sync_log.attempt_count` + `last_attempted_at` retry columns).
 - 123 unit tests pass (`npm run test`). Build is green on main.
-- DB types were regenerated post-010 (`src/types/database.ts` now
-  includes `execute_ai_query` + the 11 `get_*` RPCs under Functions).
+- DB types regenerated post-012 (`src/types/database.ts` now includes
+  the new retry columns + `execute_ai_query` + all 11 `get_*` RPCs).
 - Vercel auto-deploys from `main` work; **do not `vercel --prod`** from
   the local Windows box (it builds a broken bundle — burned us once).
 - `/dashboard/settings` still 404s (Part 13). QBO OAuth callback
@@ -79,6 +82,40 @@ vercel logs --no-follow --since 30m --level error --expand
 - All env vars synced between `.env.local` and Vercel production
 - Git auto-deploys on push to `main` (verified working; do not
   `vercel --prod` from local)
+
+**Manual triggers (cron intentionally unscheduled during dev):**
+
+Part 11's `/api/cron/qbo-sync` dispatcher is **built and deployed but
+NOT on a schedule** — `vercel.json` has no `crons` entry yet. That's
+deliberate while we're still developing: no Vercel Cron credits get
+burned and QBO sandbox isn't getting hammered every 15 min. The
+dispatcher is a regular authenticated GET endpoint, so you can drain
+the queue whenever you want:
+
+```bash
+# From a shell with CRON_SECRET in the env (pulled via `vercel env pull`
+# or copied from the Vercel dashboard):
+curl -s -H "Authorization: Bearer $CRON_SECRET" \
+  https://www.lotmonster.co/api/cron/qbo-sync
+# Response: { attempted, succeeded, failed, skipped }
+```
+
+Reasonable test flow: make a change that writes a `qbo_sync_log`
+row (ship an SO → `invoice` row, receive a PO → `bill` row, complete
+a run → `journal_entry` row), then hit the curl above, then check
+the sync log / QBO sandbox to confirm the doc posted.
+
+**To activate the schedule later** (requires Vercel Pro for sub-daily
+cadences), create `vercel.json` with:
+```json
+{
+  "crons": [
+    { "path": "/api/cron/qbo-sync", "schedule": "*/15 * * * *" }
+  ]
+}
+```
+Commit + push — Vercel picks up the new config on the next deploy.
+Confirm it's registered under Project → Settings → Cron Jobs.
 
 **Build guide authority:** `docs/lotmonster-build-guide-v4.md` remains
 the authoritative source from Part 9 onward. A Perplexity-revised guide
@@ -648,11 +685,15 @@ Each item now has a home in the revised plan. Rough order of operations:
   sandbox company `Sandbox Company US 74a4` (realm `9341456849762719`).
   Journal-entry, bill, and invoice round-trips. Account mappings are
   still direct-DB-insert (no UI yet — settings shell is Part 13).
-- **Part 11 (requires Vercel Pro):** `/api/cron/qbo-sync` dispatcher
-  on every-15-min cadence. Hobby plan is 1/day, insufficient.
-  Migration 011 adds `qbo_sync_log` retry columns
-  (`attempt_count`, `last_attempted_at`, `error_message`).
-- **Part 12:** Stripe billing (migration 012).
+- **Part 11 — scheduling deferred, code done:** `/api/cron/qbo-sync`
+  dispatcher is built, deployed, and manually triggerable (see
+  "Manual triggers" in the handoff block above). `vercel.json`
+  intentionally has no `crons` entry yet — flip it on when we want
+  automated sub-daily cadence (needs Vercel Pro). Migration 012
+  (bumped from 011 after the SET-ROLE hotfix took that slot) adds
+  `attempt_count` + `last_attempted_at` retry columns.
+- **Part 12:** Stripe billing (migration 013 — bumped by the hotfix
+  renumber).
 - **Part 13:** Demo seeder + polish, including the `/dashboard/settings`
   shell that fixes the QBO callback 404 AND gives operators a UI for
   per-SKU QBO Item mappings (today those are direct-DB only).
